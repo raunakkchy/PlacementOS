@@ -11,7 +11,7 @@ import {
 interface AppHeaderProps {
   user: User | null;
   readinessScore: ReadinessScore | null;
-  activeTab: "score" | "jobs" | "roadmap" | "interview" | "mcq";
+  activeTab: "score" | "jobs" | "roadmap" | "interview";
   onToggleSidebar?: () => void;
   onOpenProfile: () => void;
   onOpenAuth: (mode?: "login" | "register") => void;

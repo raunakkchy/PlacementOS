@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Roadmap, User, SkillGapAnalysis } from "../types";
+import { getMappedResource, getMultipleMappedResources, isHomepageUrl } from "../utils/resourceMapper";
 import {
   Map,
   CheckCircle2,
@@ -32,6 +33,112 @@ import {
   Hammer,
 } from "lucide-react";
 import confetti from "canvas-confetti";
+
+const RenderResourceCard: React.FC<{
+  itemSkillOrTitle: string;
+  resourceUrl?: string;
+  resourceProvider?: string;
+  resourceTitle?: string;
+  resourceType?: string;
+  resourceOptions?: Array<{
+    title: string;
+    provider: string;
+    url: string;
+    type?: string;
+    reason?: string;
+  }>;
+  studentBranch?: string;
+}> = ({
+  itemSkillOrTitle,
+  resourceUrl,
+  resourceProvider,
+  resourceTitle,
+  resourceType,
+  resourceOptions,
+  studentBranch,
+}) => {
+  const [selectedIdx, setSelectedIdx] = useState(0);
+
+  const fallbackList = getMultipleMappedResources(itemSkillOrTitle, studentBranch);
+  const options = (resourceOptions && resourceOptions.length > 0)
+    ? resourceOptions.filter((r) => r.url && !isHomepageUrl(r.url))
+    : fallbackList;
+
+  const currentList = options.length > 0 ? options : fallbackList;
+  const activeRes = currentList[selectedIdx] || currentList[0];
+
+  const targetUrl = (selectedIdx === 0 && resourceUrl && !isHomepageUrl(resourceUrl))
+    ? resourceUrl
+    : activeRes.url;
+  const provider = (selectedIdx === 0 && resourceProvider) || activeRes.provider;
+  const title = (selectedIdx === 0 && resourceTitle) || activeRes.title;
+  const type = (selectedIdx === 0 && resourceType) || activeRes.type || "Tutorial";
+
+  return (
+    <div className="mt-3 pt-2.5 border-t border-slate-100 bg-slate-50/90 p-3 rounded-xl border border-slate-200/70 space-y-2">
+      {currentList.length > 1 && (
+        <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+            {currentList.length} Learning Options Discovered:
+          </span>
+          <div className="inline-flex gap-1 bg-white p-0.5 rounded-lg border border-slate-200">
+            {currentList.map((opt, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setSelectedIdx(idx)}
+                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
+                  selectedIdx === idx
+                    ? "bg-indigo-600 text-white shadow-2xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                {opt.provider}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-indigo-600 shrink-0" />
+          <div>
+            <div className="text-xs font-bold text-slate-900">
+              {title}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+              <span className="font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.2">
+                {provider}
+              </span>
+              <span>•</span>
+              <span className="font-medium text-slate-600">{type}</span>
+              {activeRes.reason && (
+                <>
+                  <span>•</span>
+                  <span className="text-slate-500 line-clamp-1 max-w-[220px]">
+                    {activeRes.reason}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <a
+          href={targetUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 px-3.5 py-1.5 text-xs font-bold text-white transition-all shadow-2xs hover:shadow group shrink-0"
+          title={`Open ${title} on ${provider} in a new browser tab`}
+        >
+          <span>Start Learning</span>
+          <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+        </a>
+      </div>
+    </div>
+  );
+};
 
 interface RoadmapViewProps {
   roadmap: Roadmap | null;
@@ -451,26 +558,38 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                       key={idx}
                       className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 flex flex-col justify-between hover:border-slate-300 transition-colors"
                     >
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <span className="text-xs font-extrabold text-slate-900">
-                          {item.skill}
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-semibold text-slate-500 bg-white border border-slate-200 rounded px-1.5 py-0.5">
-                            {item.currentLevel} → {item.requiredLevel}
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <span className="text-xs font-extrabold text-slate-900">
+                            {item.skill}
                           </span>
-                          <span
-                            className={`rounded border px-2 py-0.5 text-[10px] font-extrabold ${getPriorityBadge(
-                              item.priority
-                            )}`}
-                          >
-                            {item.priority} Priority
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-semibold text-slate-500 bg-white border border-slate-200 rounded px-1.5 py-0.5">
+                              {item.currentLevel} → {item.requiredLevel}
+                            </span>
+                            <span
+                              className={`rounded border px-2 py-0.5 text-[10px] font-extrabold ${getPriorityBadge(
+                                item.priority
+                              )}`}
+                            >
+                              {item.priority} Priority
+                            </span>
+                          </div>
                         </div>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          {item.reason}
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        {item.reason}
-                      </p>
+
+                      <RenderResourceCard
+                        itemSkillOrTitle={item.skill || ""}
+                        resourceUrl={(item as any).resourceUrl}
+                        resourceProvider={(item as any).resourceProvider}
+                        resourceTitle={(item as any).resourceTitle}
+                        resourceType={(item as any).resourceType}
+                        resourceOptions={(item as any).resourceOptions}
+                        studentBranch={user.branch}
+                      />
                     </div>
                   ))}
                 </div>
@@ -736,44 +855,15 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                                 </p>
                               )}
 
-                              {(item.linkText || item.resourceUrl) && (() => {
-                                const url = item.resourceUrl;
-                                const isValidUrl =
-                                  url &&
-                                  typeof url === "string" &&
-                                  (url.startsWith("https://") || url.startsWith("http://")) &&
-                                  !url.includes("javascript:") &&
-                                  !url.includes("example.com");
-                                const resourceTitle = item.linkText || item.title || "Learn & Practice";
-                                const provider = (item as any).resourceProvider || "Verified Educational Source";
-
-                                if (!isValidUrl) {
-                                  return (
-                                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-slate-100 border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500">
-                                      <span className="h-2 w-2 rounded-full bg-slate-400"></span>
-                                      <span>Resource currently unavailable</span>
-                                    </div>
-                                  );
-                                }
-
-                                return (
-                                  <a
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100/90 border border-indigo-200/80 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition-colors group shadow-2xs"
-                                    title="Opens external learning resource in a new browser tab"
-                                  >
-                                    <ExternalLink className="h-3.5 w-3.5 text-indigo-600 transition-transform group-hover:scale-110 shrink-0" />
-                                    <span>
-                                      Resource: {resourceTitle}
-                                    </span>
-                                    <span className="text-[10px] text-indigo-500 font-normal">
-                                      ({provider})
-                                    </span>
-                                  </a>
-                                );
-                              })()}
+                              <RenderResourceCard
+                                itemSkillOrTitle={item.skill || item.topic || item.title || ""}
+                                resourceUrl={item.resourceUrl}
+                                resourceProvider={(item as any).resourceProvider}
+                                resourceTitle={item.linkText || (item as any).resourceTitle}
+                                resourceType={(item as any).resourceType}
+                                resourceOptions={(item as any).resourceOptions}
+                                studentBranch={user.branch}
+                              />
                             </div>
                           </div>
                         );

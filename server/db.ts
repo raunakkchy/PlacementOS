@@ -150,6 +150,17 @@ export interface PrioritySkillItem {
   requiredLevel: "Beginner" | "Intermediate" | "Advanced";
   priority: "High" | "Medium" | "Low";
   reason: string;
+  resourceUrl?: string;
+  resourceProvider?: string;
+  resourceTitle?: string;
+  resourceType?: string;
+  resourceOptions?: Array<{
+    title: string;
+    provider: string;
+    url: string;
+    type?: string;
+    reason?: string;
+  }>;
 }
 
 export interface SkillGapAnalysis {
@@ -179,6 +190,14 @@ export interface RoadmapItem {
   resourceUrl?: string;
   resourceProvider?: string;
   resourceTopic?: string;
+  resourceType?: string;
+  resourceOptions?: Array<{
+    title: string;
+    provider: string;
+    url: string;
+    type?: string;
+    reason?: string;
+  }>;
   difficulty?: "Beginner" | "Intermediate" | "Advanced";
   estimatedHours?: number;
   completed: boolean;
@@ -315,54 +334,6 @@ export interface ReadinessScoreDocument {
   topStrengths: string[];
   urgentActionItems: string[];
   calculatedAt: string;
-}
-
-export interface MCQQuestionItem {
-  id: string;
-  question: string;
-  options: string[];
-  correctAnswer: string;
-  explanation: string;
-  topic: string;
-  skill: string;
-  difficulty: "Easy" | "Medium" | "Hard";
-}
-
-export interface MCQTestDocument {
-  id: string;
-  userId: string;
-  role: string;
-  testType: "role" | "skill" | "skill_gap" | "roadmap";
-  testTypeLabel: string;
-  targetSubject?: string;
-  difficulty: "Easy" | "Medium" | "Hard" | "Adaptive";
-  totalQuestions: number;
-  timeLimitMinutes: number;
-  questions: MCQQuestionItem[];
-  userAnswers: Record<string, string>;
-  markedForReview: string[];
-  score: number;
-  percentage: number;
-  accuracy: number;
-  correctCount: number;
-  incorrectCount: number;
-  unansweredCount: number;
-  timeTakenSeconds: number;
-  status: "in_progress" | "completed" | "expired";
-  skillAnalysis: any[];
-  topicAnalysis: any[];
-  aiAnalysis?: {
-    overallFeedback: string;
-    whatYouKnow: string[];
-    whatYouNeedToImprove: string[];
-    recommendedNextStep: string;
-  };
-  detectedSkillGaps?: string[];
-  updatedRoadmapTopics?: string[];
-  startedAt: string;
-  submittedAt?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
 }
 
 export interface SessionDocument {
@@ -711,48 +682,6 @@ export const JobModel: Model<JobDocument> = (mongoose.models.Job as Model<JobDoc
 export const RoadmapModel: Model<RoadmapDocument> = (mongoose.models.Roadmap as Model<RoadmapDocument>) || mongoose.model<RoadmapDocument>("Roadmap", RoadmapSchema);
 export const InterviewModel: Model<InterviewDocument> = (mongoose.models.Interview as Model<InterviewDocument>) || mongoose.model<InterviewDocument>("Interview", InterviewSchema);
 export const ReadinessScoreModel: Model<ReadinessScoreDocument> = (mongoose.models.ReadinessScore as Model<ReadinessScoreDocument>) || mongoose.model<ReadinessScoreDocument>("ReadinessScore", ReadinessScoreSchema);
-
-const MCQTestSchema = new Schema<MCQTestDocument>(
-  {
-    id: { type: String, required: true, unique: true, index: true },
-    userId: { type: String, required: true, index: true },
-    role: { type: String, required: true },
-    testType: { type: String, required: true },
-    testTypeLabel: { type: String, required: true },
-    targetSubject: { type: String },
-    difficulty: { type: String, required: true },
-    totalQuestions: { type: Number, required: true },
-    timeLimitMinutes: { type: Number, required: true },
-    questions: { type: Schema.Types.Mixed, required: true },
-    userAnswers: { type: Schema.Types.Mixed, default: {} },
-    markedForReview: { type: [String], default: [] },
-    score: { type: Number, default: 0 },
-    percentage: { type: Number, default: 0 },
-    accuracy: { type: Number, default: 0 },
-    correctCount: { type: Number, default: 0 },
-    incorrectCount: { type: Number, default: 0 },
-    unansweredCount: { type: Number, default: 0 },
-    timeTakenSeconds: { type: Number, default: 0 },
-    status: { type: String, default: "in_progress", index: true },
-    skillAnalysis: { type: Schema.Types.Mixed, default: [] },
-    topicAnalysis: { type: Schema.Types.Mixed, default: [] },
-    aiAnalysis: { type: Schema.Types.Mixed },
-    detectedSkillGaps: { type: [String], default: [] },
-    updatedRoadmapTopics: { type: [String], default: [] },
-    startedAt: { type: String, required: true },
-    submittedAt: { type: String },
-  },
-  {
-    timestamps: true,
-    versionKey: false,
-  }
-);
-
-MCQTestSchema.index({ userId: 1, createdAt: -1 });
-
-export const MCQTestModel: Model<MCQTestDocument> =
-  (mongoose.models.MCQTest as Model<MCQTestDocument>) ||
-  mongoose.model<MCQTestDocument>("MCQTest", MCQTestSchema);
 
 const PasswordResetSchema = new Schema<PasswordResetDocument>(
   {
@@ -1627,38 +1556,6 @@ export const db = {
         email: email.toLowerCase().trim(),
         usedAt: { $exists: false },
       }).exec();
-    },
-  },
-
-  // MCQ Tests
-  mcqTests: {
-    create: async (data: Partial<MCQTestDocument>): Promise<MCQTestDocument> => {
-      const doc = await MCQTestModel.create(data);
-      return doc.toObject() as unknown as MCQTestDocument;
-    },
-    findById: async (id: string): Promise<MCQTestDocument | null> => {
-      const doc = await MCQTestModel.findOne({ id }).lean().exec();
-      return doc as unknown as MCQTestDocument | null;
-    },
-    findByUserId: async (userId: string): Promise<MCQTestDocument[]> => {
-      const docs = await MCQTestModel.find({ userId })
-        .sort({ createdAt: -1 })
-        .lean()
-        .exec();
-      return docs as unknown as MCQTestDocument[];
-    },
-    findCompletedByUserId: async (userId: string): Promise<MCQTestDocument[]> => {
-      const docs = await MCQTestModel.find({ userId, status: "completed" })
-        .sort({ createdAt: -1 })
-        .lean()
-        .exec();
-      return docs as unknown as MCQTestDocument[];
-    },
-    update: async (id: string, updateData: Partial<MCQTestDocument>): Promise<MCQTestDocument | null> => {
-      const updated = await MCQTestModel.findOneAndUpdate({ id }, { $set: updateData }, { new: true })
-        .lean()
-        .exec();
-      return updated as unknown as MCQTestDocument | null;
     },
   },
 };

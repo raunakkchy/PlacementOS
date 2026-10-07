@@ -5,14 +5,13 @@ import {
   Briefcase,
   Compass,
   Video,
-  FileQuestion,
   User as UserIcon,
 } from "lucide-react";
 
 interface MobileBottomNavProps {
   user: User | null;
-  activeTab: "score" | "jobs" | "roadmap" | "interview" | "mcq";
-  setActiveTab: (tab: "score" | "jobs" | "roadmap" | "interview" | "mcq") => void;
+  activeTab: "score" | "jobs" | "roadmap" | "interview";
+  setActiveTab: (tab: "score" | "jobs" | "roadmap" | "interview") => void;
   onOpenProfile: () => void;
 }
 
@@ -45,13 +44,6 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       icon: Compass,
       action: () => setActiveTab("roadmap"),
       isActive: activeTab === "roadmap",
-    },
-    {
-      id: "mcq" as const,
-      label: "MCQ Test",
-      icon: FileQuestion,
-      action: () => setActiveTab("mcq"),
-      isActive: activeTab === "mcq",
     },
     {
       id: "interview" as const,

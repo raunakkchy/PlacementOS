@@ -7,7 +7,6 @@ import { ScoreDashboard } from "./components/ScoreDashboard";
 import { AiJobRoleRecommendations } from "./components/AiJobRoleRecommendations";
 import { RoadmapView } from "./components/RoadmapView";
 import { MockInterviewRoom } from "./components/MockInterviewRoom";
-import { McqDashboard } from "./components/mcq/McqDashboard";
 import { AuthModal } from "./components/AuthModal";
 import { ProfileDrawer } from "./components/ProfileDrawer";
 import { AppRoutes } from "./routes/AppRoutes";
@@ -22,7 +21,7 @@ export default function App() {
   const [currentRoadmap, setCurrentRoadmap] = useState<Roadmap | null>(null);
   const [isEditingCareerProfile, setIsEditingCareerProfile] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<"score" | "jobs" | "roadmap" | "interview" | "mcq">("score");
+  const [activeTab, setActiveTab] = useState<"score" | "jobs" | "roadmap" | "interview">("score");
   const [isInterviewActive, setIsInterviewActive] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<"login" | "register">("register");
@@ -410,14 +409,6 @@ export default function App() {
                   onNavigateTab={setActiveTab}
                   onActiveStateChange={setIsInterviewActive}
                   onOpenProfile={() => setIsProfileDrawerOpen(true)}
-                />
-              )}
-
-              {activeTab === "mcq" && user && (
-                <McqDashboard
-                  user={user}
-                  onNavigateTab={setActiveTab}
-                  onRefreshDashboard={fetchDashboardData}
                 />
               )}
             </div>
