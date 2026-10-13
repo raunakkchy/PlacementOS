@@ -15,6 +15,11 @@ function getMailTransporter(): Transporter | null {
   // Strip whitespace from passwords (Google App Passwords are shown in 4x4 chunks with spaces)
   const pass = rawPass?.replace(/\s+/g, "");
 
+  // If credentials are not provided, do not initialize live SMTP
+  if (!user || !pass) {
+    return null;
+  }
+
   // If user provided a Gmail address or service="gmail"
   const isGmail = service === "gmail" || host === "smtp.gmail.com" || (user && user.toLowerCase().endsWith("@gmail.com"));
 
@@ -23,18 +28,33 @@ function getMailTransporter(): Transporter | null {
   }
 
   if (!transporter) {
-    if (isGmail && (!host || host === "smtp.gmail.com")) {
+    const rawPort = process.env.SMTP_PORT?.trim();
+    // For Gmail on cloud platforms (Render/Railway), port 465 with direct SSL is significantly faster and avoids STARTTLS blocks
+    const port = rawPort ? Number(rawPort) : (isGmail ? 465 : 587);
+    const secure = port === 465;
+
+    if (isGmail) {
       transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: user ? { user, pass } : undefined,
+        host: host || "smtp.gmail.com",
+        port,
+        secure,
+        auth: { user, pass },
+        connectionTimeout: 10000, // 10s connection timeout prevents hanging
+        greetingTimeout: 8000,
+        socketTimeout: 15000,
+        tls: {
+          rejectUnauthorized: false,
+        },
       });
     } else {
-      const port = Number(process.env.SMTP_PORT?.trim()) || 587;
       transporter = nodemailer.createTransport({
         host,
         port,
-        secure: port === 465,
-        auth: user ? { user, pass } : undefined,
+        secure,
+        auth: { user, pass },
+        connectionTimeout: 10000,
+        greetingTimeout: 8000,
+        socketTimeout: 15000,
         tls: {
           rejectUnauthorized: false,
         },
@@ -136,6 +156,11 @@ export async function sendOtpEmail({ to, otp }: SendOtpEmailParams): Promise<boo
       return true;
     } catch (err: any) {
       console.error(`[Email Service] Failed to send email to ${maskEmail(to)} via SMTP:`, err.message);
+      if (err.message?.includes("Username and Password not accepted") || err.code === "EAUTH") {
+        console.error("[Email Service Hint] Gmail authentication failed. Ensure you use a 16-character Google App Password (not your normal Gmail password) and that 2-Step Verification is active.");
+      } else if (err.code === "ETIMEDOUT" || err.code === "ESOCKET" || err.message?.includes("timeout")) {
+        console.error("[Email Service Hint] Connection timed out. On Render, set SMTP_PORT=465 in Environment Variables for direct SSL.");
+      }
       return false;
     }
   } else {
@@ -234,6 +259,11 @@ export async function sendRegistrationOtpEmail({
       return true;
     } catch (err: any) {
       console.error(`[Email Service] Failed to send registration email to ${maskEmail(to)} via SMTP:`, err.message);
+      if (err.message?.includes("Username and Password not accepted") || err.code === "EAUTH") {
+        console.error("[Email Service Hint] Gmail authentication failed. Ensure you use a 16-character Google App Password (not your normal Gmail password) and that 2-Step Verification is active.");
+      } else if (err.code === "ETIMEDOUT" || err.code === "ESOCKET" || err.message?.includes("timeout")) {
+        console.error("[Email Service Hint] Connection timed out. On Render, set SMTP_PORT=465 in Environment Variables for direct SSL.");
+      }
       return false;
     }
   } else {
