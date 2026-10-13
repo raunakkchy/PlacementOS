@@ -7,39 +7,58 @@ interface SendOtpEmailParams {
 
 let transporter: Transporter | null = null;
 
+function cleanEnvString(val?: string): string {
+  if (!val) return "";
+  let cleaned = val.trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+  }
+  return cleaned;
+}
+
 function getMailTransporter(): Transporter | null {
-  const host = process.env.SMTP_HOST?.trim();
-  const service = process.env.SMTP_SERVICE?.trim()?.toLowerCase();
-  const user = process.env.SMTP_USER?.trim();
-  const rawPass = process.env.SMTP_PASSWORD?.trim();
-  // Strip whitespace from passwords (Google App Passwords are shown in 4x4 chunks with spaces)
-  const pass = rawPass?.replace(/\s+/g, "");
+  const host = cleanEnvString(process.env.SMTP_HOST);
+  const service = cleanEnvString(process.env.SMTP_SERVICE).toLowerCase();
+  const user = cleanEnvString(process.env.SMTP_USER);
+  const rawPass = cleanEnvString(process.env.SMTP_PASSWORD);
+  // Strip whitespace and any extraneous quotes from passwords
+  const pass = rawPass.replace(/["']/g, "").replace(/\s+/g, "");
 
   // If credentials are not provided, do not initialize live SMTP
   if (!user || !pass) {
     return null;
   }
 
-  // If user provided a Gmail address or service="gmail"
-  const isGmail = service === "gmail" || host === "smtp.gmail.com" || (user && user.toLowerCase().endsWith("@gmail.com"));
+  // If user provided a Gmail address or service="gmail" or host contains gmail
+  const isGmail =
+    service === "gmail" ||
+    host === "smtp.gmail.com" ||
+    host.includes("gmail") ||
+    (user && user.toLowerCase().endsWith("@gmail.com"));
 
   if (!host && !isGmail) {
     return null;
   }
 
   if (!transporter) {
-    const rawPort = process.env.SMTP_PORT?.trim();
-    // For Gmail on cloud platforms (Render/Railway), port 465 with direct SSL is significantly faster and avoids STARTTLS blocks
+    const rawPort = cleanEnvString(process.env.SMTP_PORT);
+    // On cloud platforms (Render, Railway, AWS), port 587 STARTTLS is frequently throttled or blocked, causing 15-30s hangs.
+    // Port 465 with direct SSL connects in < 1 second.
+    // If Gmail is detected and port is either 587, 465, or unset, use port 465 with SSL.
     const port = rawPort ? Number(rawPort) : (isGmail ? 465 : 587);
-    const secure = port === 465;
+    const usePort = isGmail && (port === 587 || !rawPort) ? 465 : port;
+    const secure = usePort === 465;
 
     if (isGmail) {
       transporter = nodemailer.createTransport({
         host: host || "smtp.gmail.com",
-        port,
+        port: usePort,
         secure,
         auth: { user, pass },
-        connectionTimeout: 10000, // 10s connection timeout prevents hanging
+        connectionTimeout: 10000, // 10s connection timeout
         greetingTimeout: 8000,
         socketTimeout: 15000,
         tls: {
@@ -79,9 +98,10 @@ function maskEmail(email: string): string {
 
 export async function sendOtpEmail({ to, otp }: SendOtpEmailParams): Promise<boolean> {
   const mailTransporter = getMailTransporter();
-  const smtpUser = process.env.SMTP_USER?.trim() || "";
+  const smtpUser = cleanEnvString(process.env.SMTP_USER);
+  const rawFrom = cleanEnvString(process.env.MAIL_FROM);
   // Display strictly as "Placement OS"
-  const from = process.env.MAIL_FROM?.trim() || (smtpUser ? `"Placement OS" <${smtpUser}>` : "Placement OS <noreply@placementos.com>");
+  const from = rawFrom || (smtpUser ? `"Placement OS" <${smtpUser}>` : "Placement OS <noreply@placementos.com>");
   const replyTo = smtpUser || from;
 
   const subject = "Verify Your Email - Placement OS Password Reset OTP";
@@ -181,9 +201,10 @@ export async function sendRegistrationOtpEmail({
   studentName?: string;
 }): Promise<boolean> {
   const mailTransporter = getMailTransporter();
-  const smtpUser = process.env.SMTP_USER?.trim() || "";
+  const smtpUser = cleanEnvString(process.env.SMTP_USER);
+  const rawFrom = cleanEnvString(process.env.MAIL_FROM);
   // Display strictly as "Placement OS"
-  const from = process.env.MAIL_FROM?.trim() || (smtpUser ? `"Placement OS" <${smtpUser}>` : "Placement OS <noreply@placementos.com>");
+  const from = rawFrom || (smtpUser ? `"Placement OS" <${smtpUser}>` : "Placement OS <noreply@placementos.com>");
   const replyTo = smtpUser || from;
 
   const displayName = studentName?.trim() || "Student";

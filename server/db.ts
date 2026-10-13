@@ -1550,7 +1550,12 @@ export const db = {
 let mongoMemoryServerInstance: any = null;
 
 export async function initMongo(): Promise<void> {
-  const uri = process.env.MONGODB_URI?.trim();
+  const rawUri = process.env.MONGODB_URI?.trim();
+  const uri = rawUri
+    ? (rawUri.startsWith('"') && rawUri.endsWith('"')) || (rawUri.startsWith("'") && rawUri.endsWith("'"))
+      ? rawUri.slice(1, -1).trim()
+      : rawUri
+    : "";
   const isProduction = process.env.NODE_ENV === "production";
 
   if (uri) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { User, ReadinessScore, SuggestedJobRole } from "../types";
 import {
   GraduationCap,
@@ -12,7 +12,13 @@ import {
   Zap,
   UserPlus,
   LogIn,
+  RotateCcw,
+  Mail,
+  ArrowLeft,
+  ShieldCheck,
+  Loader2,
 } from "lucide-react";
+import { sendRegistrationOtp, registerStudent, saveAuthToken } from "../services/auth";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -61,17 +67,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      setMode(initialMode);
-      setError(null);
-    }
-  }, [isOpen, initialMode]);
-
   // Form state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [rollNumber, setRollNumber] = useState("");
   const [phone, setPhone] = useState("");
   const [college, setCollege] = useState("");
   const [course, setCourse] = useState("B.Tech");
@@ -90,6 +90,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   ]);
   const [resumeText, setResumeText] = useState("");
   const [resumeFileName, setResumeFileName] = useState("");
+
+  // Compulsory Email OTP state
+  const [isOtpStep, setIsOtpStep] = useState(false);
+  const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(""));
+  const [otpCooldown, setOtpCooldown] = useState(0);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpSuccess, setOtpSuccess] = useState(false);
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Decrement OTP resend cooldown timer
+  useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setOtpCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [otpCooldown]);
+
+  // Focus first OTP input when opening OTP step
+  useEffect(() => {
+    if (isOtpStep) {
+      const timer = setTimeout(() => {
+        otpInputRefs.current[0]?.focus();
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [isOtpStep]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setMode(initialMode);
+      setError(null);
+      setIsOtpStep(false);
+      setOtpError(null);
+      setOtpSuccess(false);
+      setOtpDigits(Array(6).fill(""));
+    }
+  }, [isOpen, initialMode]);
 
   if (!isOpen) return null;
 
@@ -122,54 +161,196 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
+  // OTP Input handlers
+  const handleOtpDigitChange = (index: number, val: string) => {
+    if (otpError) setOtpError(null);
+    const numericChar = val.replace(/\D/g, "");
+
+    if (!numericChar) {
+      const updated = [...otpDigits];
+      updated[index] = "";
+      setOtpDigits(updated);
+      return;
+    }
+
+    const char = numericChar.slice(-1);
+    const updated = [...otpDigits];
+    updated[index] = char;
+    setOtpDigits(updated);
+
+    if (index < 5) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace") {
+      if (!otpDigits[index] && index > 0) {
+        otpInputRefs.current[index - 1]?.focus();
+        const updated = [...otpDigits];
+        updated[index - 1] = "";
+        setOtpDigits(updated);
+      } else {
+        const updated = [...otpDigits];
+        updated[index] = "";
+        setOtpDigits(updated);
+      }
+    } else if (e.key === "ArrowLeft" && index > 0) {
+      otpInputRefs.current[index - 1]?.focus();
+    } else if (e.key === "ArrowRight" && index < 5) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (otpError) setOtpError(null);
+
+    const pasted = e.clipboardData.getData("text");
+    const digitsOnly = pasted.replace(/\D/g, "").slice(0, 6);
+
+    if (digitsOnly.length > 0) {
+      const updated = [...otpDigits];
+      for (let i = 0; i < 6; i++) {
+        updated[i] = digitsOnly[i] || "";
+      }
+      setOtpDigits(updated);
+
+      const nextEmpty = updated.findIndex((d) => !d);
+      if (nextEmpty !== -1) {
+        otpInputRefs.current[nextEmpty]?.focus();
+      } else {
+        otpInputRefs.current[5]?.focus();
+      }
+    }
+  };
+
+  // Resend OTP
+  const handleResendOtp = async () => {
+    if (otpCooldown > 0 || otpLoading) return;
+    setOtpError(null);
+
+    try {
+      await sendRegistrationOtp({
+        email: email.trim().toLowerCase(),
+        fullName: fullName.trim(),
+        rollNumber: rollNumber.trim() || undefined,
+      });
+      setOtpCooldown(60);
+      setOtpDigits(Array(6).fill(""));
+      otpInputRefs.current[0]?.focus();
+    } catch (err: any) {
+      setOtpError(err.message || "Failed to resend verification code. Please try again.");
+    }
+  };
+
+  // Step 1 Submit: Login directly OR send OTP for Registration
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
     try {
-      const finalBranch = branch === "Other" && otherBranch.trim() ? otherBranch.trim() : branch;
-      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
-      const payload =
-        mode === "login"
-          ? { email, password }
-          : {
-              email,
-              password,
-              fullName,
-              phone,
-              college,
-              course,
-              branch: finalBranch,
-              semester: Number(semester),
-              cgpa: Number(cgpa),
-              tenthMarks: Number(tenthMarks),
-              twelfthMarks: Number(twelfthMarks),
-              graduationYear: Number(graduationYear),
-              backlogs: Number(backlogs),
-              skills: selectedSkills,
-              targetRoles,
-              resumeText: resumeText || undefined,
-              resumeFileName: resumeFileName || undefined,
-            };
+      if (mode === "login") {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ email, password }),
+        });
 
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Authentication request failed");
+        }
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Authentication request failed");
+        if (data.token) {
+          saveAuthToken(data.token, data.user?.email || email);
+        }
+
+        onSuccess(data.user, data.readinessScore, data.suggestedJobs);
+        onClose();
+      } else {
+        // Registration: validate required fields first
+        const trimmedEmail = email.trim().toLowerCase();
+        const trimmedName = fullName.trim();
+        const trimmedCollege = college.trim();
+
+        if (!trimmedEmail || !password || !trimmedName || !trimmedCollege || !course || !branch || semester === "" || cgpa === "") {
+          throw new Error("Please fill in all mandatory fields (Name, Email, Password, College, Course, Branch, Semester, CGPA).");
+        }
+
+        if (password.length < 8) {
+          throw new Error("Password must be at least 8 characters long.");
+        }
+
+        // Send Registration OTP to Email
+        await sendRegistrationOtp({
+          email: trimmedEmail,
+          fullName: trimmedName,
+          rollNumber: rollNumber.trim() || undefined,
+        });
+
+        setIsOtpStep(true);
+        setOtpDigits(Array(6).fill(""));
+        setOtpError(null);
+        setOtpCooldown(60);
       }
-
-      onSuccess(data.user, data.readinessScore, data.suggestedJobs);
-      onClose();
     } catch (err: any) {
       setError(err.message || "An error occurred");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Step 2 Submit: Verify OTP & Create Account
+  const handleVerifyAndRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const fullOtp = otpDigits.join("");
+
+    if (fullOtp.length !== 6) {
+      setOtpError("Please enter the complete 6-digit verification code.");
+      return;
+    }
+
+    setOtpError(null);
+    setOtpLoading(true);
+
+    try {
+      const finalBranch = branch === "Other" && otherBranch.trim() ? otherBranch.trim() : branch;
+      const payload = {
+        email: email.trim().toLowerCase(),
+        password,
+        fullName: fullName.trim(),
+        rollNumber: rollNumber.trim() || undefined,
+        phone: phone.trim() || undefined,
+        college: college.trim(),
+        course,
+        branch: finalBranch,
+        semester: Number(semester),
+        cgpa: Number(cgpa),
+        tenthMarks: tenthMarks !== "" ? Number(tenthMarks) : undefined,
+        twelfthMarks: twelfthMarks !== "" ? Number(twelfthMarks) : undefined,
+        graduationYear: Number(graduationYear),
+        backlogs: Number(backlogs),
+        skills: selectedSkills,
+        targetRoles,
+        resumeText: resumeText || undefined,
+        resumeFileName: resumeFileName || undefined,
+        otp: fullOtp,
+      };
+
+      const data = await registerStudent(payload);
+      setOtpSuccess(true);
+
+      setTimeout(() => {
+        onSuccess(data.user, data.readinessScore, data.suggestedJobs);
+        onClose();
+      }, 700);
+    } catch (err: any) {
+      setOtpError(err.message || "Invalid or expired verification code. Please check and try again.");
+    } finally {
+      setOtpLoading(false);
     }
   };
 
@@ -207,7 +388,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               type="button"
               onClick={() => {
                 setMode("register");
+                setIsOtpStep(false);
                 setError(null);
+                setOtpError(null);
               }}
               className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-bold transition-all ${
                 mode === "register"
@@ -223,7 +406,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               type="button"
               onClick={() => {
                 setMode("login");
+                setIsOtpStep(false);
                 setError(null);
+                setOtpError(null);
               }}
               className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-bold transition-all ${
                 mode === "login"
@@ -246,7 +431,125 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         )}
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 max-h-[70vh] overflow-y-auto space-y-5">
+        {mode === "register" && isOtpStep ? (
+          <div className="p-6 space-y-6">
+            <div className="text-center space-y-2">
+              <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-600 mb-1">
+                <Mail className="h-6 w-6" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 tracking-tight">
+                Verify Your Email Address
+              </h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                A 6-digit verification code has been sent to{" "}
+                <span className="font-semibold text-slate-800">{email}</span>. Please enter it below to activate your account.
+              </p>
+            </div>
+
+            {otpError && (
+              <div className="flex items-center gap-2 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                <span>{otpError}</span>
+              </div>
+            )}
+
+            {otpSuccess ? (
+              <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-center space-y-1">
+                <CheckCircle2 className="h-8 w-8 text-emerald-600 mx-auto" />
+                <p className="text-sm font-bold text-emerald-900">Email Verified Successfully!</p>
+                <p className="text-xs text-emerald-700">Activating your Placement OS dashboard...</p>
+              </div>
+            ) : (
+              <form onSubmit={handleVerifyAndRegister} className="space-y-5">
+                {/* 6 Digit Inputs */}
+                <div className="flex justify-center items-center gap-2 sm:gap-3">
+                  {otpDigits.map((digit, index) => (
+                    <input
+                      key={index}
+                      ref={(el) => {
+                        otpInputRefs.current[index] = el;
+                      }}
+                      id={`modal-reg-otp-${index}`}
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={1}
+                      value={digit}
+                      onChange={(e) => handleOtpDigitChange(index, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(index, e)}
+                      onPaste={handleOtpPaste}
+                      disabled={otpLoading}
+                      aria-label={`Digit ${index + 1} of 6`}
+                      className={`w-11 h-13 sm:w-12 sm:h-14 text-center font-bold text-xl sm:text-2xl rounded-xl border bg-white text-slate-900 transition-all outline-none ${
+                        digit
+                          ? "border-indigo-600 bg-indigo-50/40"
+                          : "border-slate-300 hover:border-slate-400"
+                      } focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20`}
+                    />
+                  ))}
+                </div>
+
+                {/* Verify & Create Account Button */}
+                <button
+                  id="btn-modal-verify-otp"
+                  type="submit"
+                  disabled={otpLoading || otpDigits.join("").length !== 6}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  {otpLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      <span>Verifying & Creating Account...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="h-4 w-4" />
+                      <span>Verify & Complete Registration</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Resend & Back buttons */}
+                <div className="flex flex-col items-center gap-2 text-center pt-1">
+                  {otpCooldown > 0 ? (
+                    <p className="text-xs text-slate-500 font-medium">
+                      Resend code in{" "}
+                      <span className="font-bold text-slate-700 tabular-nums">
+                        {String(Math.floor(otpCooldown / 60)).padStart(2, "0")}:
+                        {String(otpCooldown % 60).padStart(2, "0")}
+                      </span>
+                    </p>
+                  ) : (
+                    <button
+                      id="btn-modal-resend-otp"
+                      type="button"
+                      onClick={handleResendOtp}
+                      disabled={otpLoading}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Resend Verification Code</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOtpStep(false);
+                      setOtpError(null);
+                    }}
+                    disabled={otpLoading}
+                    className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 transition-colors cursor-pointer pt-1"
+                  >
+                    <ArrowLeft className="h-3 w-3" />
+                    <span>Edit Registration Details</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 max-h-[70vh] overflow-y-auto space-y-5">
           {mode === "login" ? (
             <div className="space-y-4">
               <div>
@@ -324,6 +627,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       placeholder="Min 6 characters"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Roll / Registration Number *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 21CS045"
+                      value={rollNumber}
+                      onChange={(e) => setRollNumber(e.target.value)}
                       className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600"
                     />
                   </div>
@@ -649,13 +966,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               id="btn-submit-auth"
               type="submit"
               disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 transition-all disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 transition-all disabled:opacity-50 cursor-pointer"
             >
               <span>
                 {loading
-                  ? "Processing..."
+                  ? mode === "register"
+                    ? "Sending Verification Code..."
+                    : "Logging in..."
                   : mode === "register"
-                  ? "1. Register Student Account"
+                  ? "1. Proceed to Email OTP Verification"
                   : "2. Login"}
               </span>
               <ArrowRight className="h-4 w-4" />
@@ -695,6 +1014,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

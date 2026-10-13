@@ -26,7 +26,7 @@ import { parseResumeDocument } from "./server/resumeParser.js";
 import { getCareerRecommendations } from "./src/data/careerRecommendationEngine.js";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Setup upload handler
 const upload = multer({
