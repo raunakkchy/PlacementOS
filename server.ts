@@ -148,61 +148,6 @@ const deleteAccountRateLimit = new Map<string, { count: number; firstAttempt: nu
 const registerRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 const loginRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 
-// Security question verification failed attempt rate limiter & temporary lockout
-interface SecurityQuestionRateLimitEntry {
-  attempts: number;
-  blockedUntil: number;
-  firstAttempt: number;
-}
-const securityQuestionAttempts = new Map<string, SecurityQuestionRateLimitEntry>();
-
-function checkSecurityQuestionRateLimit(key: string): { allowed: boolean; retryAfterSeconds?: number } {
-  const now = Date.now();
-  const record = securityQuestionAttempts.get(key);
-  if (!record) {
-    return { allowed: true };
-  }
-  if (record.blockedUntil > now) {
-    const retryAfterSeconds = Math.ceil((record.blockedUntil - now) / 1000);
-    return { allowed: false, retryAfterSeconds };
-  }
-  if (now - record.firstAttempt > 15 * 60 * 1000) {
-    securityQuestionAttempts.delete(key);
-    return { allowed: true };
-  }
-  if (record.attempts >= 5) {
-    record.blockedUntil = now + 15 * 60 * 1000;
-    const retryAfterSeconds = Math.ceil((record.blockedUntil - now) / 1000);
-    return { allowed: false, retryAfterSeconds };
-  }
-  return { allowed: true };
-}
-
-function recordSecurityQuestionFailure(key: string) {
-  const now = Date.now();
-  const record = securityQuestionAttempts.get(key);
-  if (!record || (now - record.firstAttempt > 15 * 60 * 1000)) {
-    securityQuestionAttempts.set(key, { attempts: 1, firstAttempt: now, blockedUntil: 0 });
-  } else {
-    record.attempts += 1;
-    if (record.attempts >= 5) {
-      record.blockedUntil = now + 15 * 60 * 1000;
-    }
-  }
-}
-
-function clearSecurityQuestionFailures(key: string) {
-  securityQuestionAttempts.delete(key);
-}
-
-// Temporary password reset tokens for verified security questions
-interface ResetTokenRecord {
-  userId: string;
-  email: string;
-  expiresAt: number;
-}
-const passwordResetTokens = new Map<string, ResetTokenRecord>();
-
 function checkRateLimit(
   map: Map<string, { count: number; firstAttempt: number }>,
   key: string,
@@ -413,10 +358,6 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       backlogs,
       skills,
       targetRoles,
-      securityQuestion1,
-      securityAnswer1,
-      securityQuestion2,
-      securityAnswer2,
     } = req.body;
 
     const gradYear = Number(graduationYear) || (new Date().getFullYear() + ((course === "Diploma" || course === "BCA" ? 3 : 4) - Math.ceil(Number(semester || 1) / 2)));
@@ -521,38 +462,8 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       }
     }
 
-    // Enforce exactly 2 security questions with non-empty answers
-    const q1 = typeof securityQuestion1 === "string" ? securityQuestion1.trim() : "";
-    const a1 = typeof securityAnswer1 === "string" ? securityAnswer1.trim() : "";
-    const q2 = typeof securityQuestion2 === "string" ? securityQuestion2.trim() : "";
-    const a2 = typeof securityAnswer2 === "string" ? securityAnswer2.trim() : "";
-
-    if (!q1 || !a1 || !q2 || !a2) {
-      res.status(400).json({
-        error: "Two security questions and their corresponding non-empty answers are required for registration.",
-      });
-      return;
-    }
-
-    if (q1 === q2) {
-      res.status(400).json({
-        error: "Please choose two different security questions.",
-      });
-      return;
-    }
-
     // Hash password with bcrypt (cost factor 10)
     const passwordHash = await bcrypt.hash(password, 10);
-
-    // Hash security answers securely (bcrypt cost factor 10, normalized)
-    const ans1Hash = await bcrypt.hash(a1.toLowerCase(), 10);
-    const ans2Hash = await bcrypt.hash(a2.toLowerCase(), 10);
-    const securityQuestionsObj = {
-      question1: q1,
-      answer1Hash: ans1Hash,
-      question2: q2,
-      answer2Hash: ans2Hash,
-    };
 
     const userId = `student-${crypto.randomBytes(8).toString("hex")}`;
     const newUser: UserDocument = {
@@ -571,7 +482,6 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       twelfthMarks: twelfthMarks ? Number(twelfthMarks) : undefined,
       graduationYear: gradYear,
       courseDuration: courseDuration || "",
-      securityQuestions: securityQuestionsObj,
       backlogs: backlogs ? Number(backlogs) : 0,
       skills: Array.isArray(skills) ? skills : (skills ? skills.split(",").map((s: string) => s.trim()).filter(Boolean) : []),
       targetRoles: Array.isArray(targetRoles) ? targetRoles : (targetRoles ? targetRoles.split(",").map((r: string) => r.trim()).filter(Boolean) : []),
@@ -863,147 +773,15 @@ app.post("/api/auth/verify-reset-otp", async (req: Request, res: Response) => {
   }
 });
 
-// 3. Security Question Recovery - Step 1: Identify Account
-app.post(["/api/auth/forgot-password/identify", "/api/auth/forgot-password/security-questions"], async (req: Request, res: Response) => {
-  try {
-    const rawIdentifier = (req.body?.identifier || req.body?.email || "").trim();
-    if (!rawIdentifier) {
-      res.status(400).json({ error: "Email or Roll Number is required." });
-      return;
-    }
-
-    const clientIp =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket.remoteAddress ||
-      "client";
-
-    const rateKey = `identify:${clientIp}:${rawIdentifier.toLowerCase()}`;
-    if (!checkRateLimit(loginRateLimit, rateKey, 15, 15 * 60 * 1000)) {
-      res.status(429).json({ error: "Too many lookup attempts. Please try again later." });
-      return;
-    }
-
-    let user = await db.users.findByEmail(rawIdentifier);
-    if (!user) {
-      user = await db.users.findByRollNumber(rawIdentifier);
-    }
-
-    // Protect against account enumeration by giving a generic not-found message if user doesn't exist or questions aren't configured
-    if (!user || !user.securityQuestions || !user.securityQuestions.question1 || !user.securityQuestions.question2) {
-      res.status(400).json({
-        hasSecurityQuestions: false,
-        error: "Unable to find an account matching these details or security questions are not configured.",
-      });
-      return;
-    }
-
-    res.json({
-      success: true,
-      hasSecurityQuestions: true,
-      identifier: user.email,
-      question1: user.securityQuestions.question1,
-      question2: user.securityQuestions.question2,
-    });
-  } catch (err: any) {
-    console.error("Forgot password questions error:", err);
-    res.status(500).json({ error: "Failed to fetch security questions: " + err.message });
-  }
-});
-
-// 4. Security Question Recovery - Step 2: Verify Answers
-app.post("/api/auth/forgot-password/verify-answers", async (req: Request, res: Response) => {
-  try {
-    const { identifier, email, securityAnswer1, securityAnswer2 } = req.body || {};
-    const rawIdentifier = (identifier || email || "").trim();
-
-    const clientIp =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket.remoteAddress ||
-      "client";
-
-    const rateKey = `${clientIp}:${rawIdentifier.toLowerCase()}`;
-    const rateCheck = checkSecurityQuestionRateLimit(rateKey);
-    if (!rateCheck.allowed) {
-      const waitMin = Math.ceil((rateCheck.retryAfterSeconds || 900) / 60);
-      res.status(429).json({
-        error: `Too many failed verification attempts. Account recovery locked for ${waitMin} minute(s).`,
-      });
-      return;
-    }
-
-    if (!rawIdentifier) {
-      res.status(400).json({ error: "Account identifier is required." });
-      return;
-    }
-
-    const ans1 = typeof securityAnswer1 === "string" ? securityAnswer1.trim() : "";
-    const ans2 = typeof securityAnswer2 === "string" ? securityAnswer2.trim() : "";
-
-    if (!ans1 || !ans2) {
-      res.status(400).json({ error: "Both security answers are required." });
-      return;
-    }
-
-    let user = await db.users.findByEmail(rawIdentifier);
-    if (!user) {
-      user = await db.users.findByRollNumber(rawIdentifier);
-    }
-
-    if (!user || !user.securityQuestions || !user.securityQuestions.answer1Hash || !user.securityQuestions.answer2Hash) {
-      recordSecurityQuestionFailure(rateKey);
-      res.status(400).json({ error: "The security answers are incorrect." });
-      return;
-    }
-
-    const isAns1Valid = await bcrypt.compare(ans1.toLowerCase(), user.securityQuestions.answer1Hash);
-    const isAns2Valid = await bcrypt.compare(ans2.toLowerCase(), user.securityQuestions.answer2Hash);
-
-    // Verify BOTH answers. If either answer is incorrect, generic error
-    if (!isAns1Valid || !isAns2Valid) {
-      recordSecurityQuestionFailure(rateKey);
-      res.status(400).json({ error: "The security answers are incorrect." });
-      return;
-    }
-
-    // Both answers verified! Clear failure counts and issue temporary reset token
-    clearSecurityQuestionFailures(rateKey);
-
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    passwordResetTokens.set(resetToken, {
-      userId: user.id,
-      email: user.email,
-      expiresAt: Date.now() + 15 * 60 * 1000, // 15 min expiry
-    });
-
-    res.json({
-      success: true,
-      resetToken,
-      message: "Security answers verified successfully. Please set your new password.",
-    });
-  } catch (err: any) {
-    console.error("Verify security answers error:", err);
-    res.status(500).json({ error: "Verification failed: " + err.message });
-  }
-});
-
-// 5. Security Question Recovery - Step 3: Reset Password
+// 3. Reset Password (using verified OTP reset token)
 app.post(["/api/auth/reset-password", "/api/auth/forgot-password/reset-password"], async (req: Request, res: Response) => {
   try {
     const {
       resetToken,
-      identifier,
-      email,
-      securityAnswer1,
-      securityAnswer2,
       newPassword,
       confirmPassword,
       confirmNewPassword,
     } = req.body || {};
-
-    const clientIp =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket.remoteAddress ||
-      "client";
 
     const passwordToSet = newPassword;
     const confirmation = confirmPassword || confirmNewPassword;
@@ -1032,82 +810,30 @@ app.post(["/api/auth/reset-password", "/api/auth/forgot-password/reset-password"
       return;
     }
 
-    let targetUser: UserDocument | null = null;
-    let resetDocIdToInvalidate: string | null = null;
-
-    // Path A: Authenticated via validated resetToken
-    if (resetToken && typeof resetToken === "string") {
-      const resetTokenHash = crypto.createHash("sha256").update(resetToken.trim()).digest("hex");
-      const record = await db.passwordResets.findByResetTokenHash(resetTokenHash);
-
-      if (
-        record &&
-        record.verified &&
-        !record.usedAt &&
-        record.resetTokenExpiresAt &&
-        new Date(record.resetTokenExpiresAt) > new Date()
-      ) {
-        targetUser = await db.users.findById(record.userId);
-        resetDocIdToInvalidate = record.id;
-      } else {
-        // Fallback: Check in-memory legacy tokens for backward compatibility
-        const legacyRecord = passwordResetTokens.get(resetToken);
-        if (legacyRecord && legacyRecord.expiresAt > Date.now()) {
-          targetUser = await db.users.findById(legacyRecord.userId);
-          passwordResetTokens.delete(resetToken);
-        } else {
-          res.status(400).json({
-            error: "Password reset authorization has expired or is invalid. Please request a new OTP.",
-          });
-          return;
-        }
-      }
-    } 
-    // Path B: Direct submission with identifier and security answers
-    else {
-      const rawIdentifier = (identifier || email || "").trim();
-      const ans1 = typeof securityAnswer1 === "string" ? securityAnswer1.trim() : "";
-      const ans2 = typeof securityAnswer2 === "string" ? securityAnswer2.trim() : "";
-
-      const rateKey = `${clientIp}:${rawIdentifier.toLowerCase()}`;
-      const rateCheck = checkSecurityQuestionRateLimit(rateKey);
-      if (!rateCheck.allowed) {
-        const waitMin = Math.ceil((rateCheck.retryAfterSeconds || 900) / 60);
-        res.status(429).json({
-          error: `Too many failed verification attempts. Account recovery locked for ${waitMin} minute(s).`,
-        });
-        return;
-      }
-
-      if (!rawIdentifier || !ans1 || !ans2) {
-        res.status(400).json({ error: "Account identifier and both security answers are required." });
-        return;
-      }
-
-      let user = await db.users.findByEmail(rawIdentifier);
-      if (!user) {
-        user = await db.users.findByRollNumber(rawIdentifier);
-      }
-
-      if (!user || !user.securityQuestions || !user.securityQuestions.answer1Hash || !user.securityQuestions.answer2Hash) {
-        recordSecurityQuestionFailure(rateKey);
-        res.status(400).json({ error: "The security answers are incorrect." });
-        return;
-      }
-
-      const isAns1Valid = await bcrypt.compare(ans1.toLowerCase(), user.securityQuestions.answer1Hash);
-      const isAns2Valid = await bcrypt.compare(ans2.toLowerCase(), user.securityQuestions.answer2Hash);
-
-      if (!isAns1Valid || !isAns2Valid) {
-        recordSecurityQuestionFailure(rateKey);
-        res.status(400).json({ error: "The security answers are incorrect." });
-        return;
-      }
-
-      clearSecurityQuestionFailures(rateKey);
-      targetUser = user;
+    if (!resetToken || typeof resetToken !== "string") {
+      res.status(400).json({
+        error: "Password reset authorization token is required. Please verify your OTP first.",
+      });
+      return;
     }
 
+    const resetTokenHash = crypto.createHash("sha256").update(resetToken.trim()).digest("hex");
+    const record = await db.passwordResets.findByResetTokenHash(resetTokenHash);
+
+    if (
+      !record ||
+      !record.verified ||
+      record.usedAt ||
+      !record.resetTokenExpiresAt ||
+      new Date(record.resetTokenExpiresAt) <= new Date()
+    ) {
+      res.status(400).json({
+        error: "Password reset authorization has expired or is invalid. Please request a new OTP.",
+      });
+      return;
+    }
+
+    const targetUser = await db.users.findById(record.userId);
     if (!targetUser) {
       res.status(400).json({ error: "User account could not be found." });
       return;
@@ -1118,9 +844,7 @@ app.post(["/api/auth/reset-password", "/api/auth/forgot-password/reset-password"
     await db.users.update(targetUser.id, { passwordHash: newPasswordHash });
 
     // Invalidate the reset token authorization record so it cannot be reused
-    if (resetDocIdToInvalidate) {
-      await db.passwordResets.markUsed(resetDocIdToInvalidate);
-    }
+    await db.passwordResets.markUsed(record.id);
 
     // Invalidate all existing sessions for this student account
     try {

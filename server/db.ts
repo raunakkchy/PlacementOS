@@ -97,12 +97,6 @@ export interface UserDocument {
   twelfthMarks?: number; // e.g. 89%
   graduationYear: number;
   courseDuration?: string;
-  securityQuestions?: {
-    question1: string;
-    answer1Hash: string;
-    question2: string;
-    answer2Hash: string;
-  };
   backlogs: number;
   skills: string[];
   targetRoles: string[];
@@ -390,12 +384,6 @@ const UserSchema = new Schema<UserDocument>(
     twelfthMarks: { type: Number },
     graduationYear: { type: Number, required: true },
     courseDuration: { type: String },
-    securityQuestions: {
-      question1: { type: String },
-      answer1Hash: { type: String },
-      question2: { type: String },
-      answer2Hash: { type: String },
-    },
     backlogs: { type: Number, default: 0 },
     skills: [{ type: String }],
     targetRoles: [{ type: String }],
@@ -740,13 +728,8 @@ export function sanitizeUser(user: any): any {
   const userObj = user.toObject ? user.toObject() : { ...user };
   delete userObj._id;
   delete userObj.passwordHash;
-  userObj.securityQuestionsConfigured = Boolean(
-    userObj.securityQuestions?.question1 &&
-    userObj.securityQuestions?.question2 &&
-    userObj.securityQuestions?.answer1Hash &&
-    userObj.securityQuestions?.answer2Hash
-  );
   delete userObj.securityQuestions;
+  delete userObj.securityQuestionsConfigured;
   return userObj;
 }
 

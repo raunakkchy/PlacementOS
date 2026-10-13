@@ -410,7 +410,7 @@ export const FirstPageAuth: React.FC<FirstPageAuthProps> = ({
                     type="button"
                     onClick={() =>
                       setError(
-                        "To reset your password, please use the Reset Password tab or answer your registered security questions."
+                        "To reset your password, please use the Forgot Password recovery flow to verify via email verification code."
                       )
                     }
                     className="text-xs text-stone-500 hover:text-stone-800 transition-colors"

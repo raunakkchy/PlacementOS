@@ -1606,22 +1606,6 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                 </div>
               )}
 
-              {/* SECURITY QUESTIONS STATUS CARD */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-2 shadow-2xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                    <h4 className="font-bold text-slate-900 text-xs">Security Questions</h4>
-                  </div>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-semibold">
-                    <CheckCircle2 className="h-3 w-3" /> Configured
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Two recovery questions are linked to your student account for secure password resets. For your privacy, answers and answer hashes are never displayed.
-                </p>
-              </div>
-
               {/* CHANGE PASSWORD CARD */}
               <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3 shadow-2xs">
                 <div className="flex items-center gap-2">

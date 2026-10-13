@@ -28,14 +28,6 @@ interface RegisterProps {
   onSuccess?: (authData: any) => void;
 }
 
-export const PREDEFINED_SECURITY_QUESTIONS = [
-  "What was the name of your first school?",
-  "What is your favourite teacher's name?",
-  "What was your childhood nickname?",
-  "What is the name of your first pet?",
-  "What is your favourite subject?",
-];
-
 const COURSE_OPTIONS: SelectOption[] = [
   { value: "Diploma", label: "Diploma" },
   { value: "B.Tech", label: "B.Tech" },
@@ -92,14 +84,6 @@ export const Register: React.FC<RegisterProps> = ({
   const [cgpa, setCgpa] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [securityQuestion1, setSecurityQuestion1] = useState(
-    PREDEFINED_SECURITY_QUESTIONS[0]
-  );
-  const [securityAnswer1, setSecurityAnswer1] = useState("");
-  const [securityQuestion2, setSecurityQuestion2] = useState(
-    PREDEFINED_SECURITY_QUESTIONS[1]
-  );
-  const [securityAnswer2, setSecurityAnswer2] = useState("");
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -165,23 +149,6 @@ export const Register: React.FC<RegisterProps> = ({
     }
   }, [course, semester]);
 
-  // Dynamic security question options to prevent selecting the same question twice
-  const question1Options: SelectOption[] = useMemo(() => {
-    return PREDEFINED_SECURITY_QUESTIONS.map((q) => ({
-      value: q,
-      label: q,
-      disabled: q === securityQuestion2,
-    }));
-  }, [securityQuestion2]);
-
-  const question2Options: SelectOption[] = useMemo(() => {
-    return PREDEFINED_SECURITY_QUESTIONS.map((q) => ({
-      value: q,
-      label: q,
-      disabled: q === securityQuestion1,
-    }));
-  }, [securityQuestion1]);
-
   // Live password validation
   const passwordEvaluation = useMemo(() => evaluatePassword(password), [password]);
 
@@ -242,24 +209,6 @@ export const Register: React.FC<RegisterProps> = ({
       errors.confirmPassword = "Confirm Password is required.";
     } else if (password !== confirmPassword) {
       errors.confirmPassword = "Passwords do not match.";
-    }
-
-    if (!securityQuestion1) {
-      errors.securityQuestion1 = "Security Question 1 is required.";
-    }
-    if (!securityAnswer1.trim()) {
-      errors.securityAnswer1 = "Security Answer 1 is required.";
-    }
-
-    if (!securityQuestion2) {
-      errors.securityQuestion2 = "Security Question 2 is required.";
-    }
-    if (!securityAnswer2.trim()) {
-      errors.securityAnswer2 = "Security Answer 2 is required.";
-    }
-
-    if (securityQuestion1 && securityQuestion2 && securityQuestion1 === securityQuestion2) {
-      errors.securityQuestion2 = "Please choose two different security questions.";
     }
 
     setFieldErrors(errors);
@@ -417,10 +366,6 @@ export const Register: React.FC<RegisterProps> = ({
         cgpa: parseFloat(cgpa),
         password,
         confirmPassword,
-        securityQuestion1,
-        securityAnswer1: securityAnswer1.trim(),
-        securityQuestion2,
-        securityAnswer2: securityAnswer2.trim(),
         otp: fullOtp,
       });
 
@@ -678,7 +623,7 @@ export const Register: React.FC<RegisterProps> = ({
             </div>
           </div>
 
-          {/* SECTION 2: Password & Security Credentials */}
+          {/* SECTION 2: Account Password & Credentials */}
           <div className="space-y-4 pt-2">
             <div className="flex items-center gap-2 pb-1 border-b border-[#E5E3DE]">
               <Lock className="h-4 w-4 text-[#111315]" />
@@ -733,86 +678,6 @@ export const Register: React.FC<RegisterProps> = ({
                     Passwords match
                   </p>
                 )}
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION 3: Security Questions & Recovery */}
-          <div className="space-y-4 pt-2">
-            <div className="flex items-center gap-2 pb-1 border-b border-[#E5E3DE]">
-              <ShieldCheck className="h-4 w-4 text-[#111315]" />
-              <span className="text-xs font-bold uppercase tracking-wider text-[#111315]">
-                Security Questions & Account Recovery
-              </span>
-            </div>
-            <p className="text-xs text-[#737373]">
-              Select two different security questions. These are hashed securely
-              and used to verify your identity during password recovery.
-            </p>
-
-            <div className="space-y-3.5">
-              {/* Security Question 1 */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3.5">
-                <AuthSelect
-                  id="reg-select-sq1"
-                  label="Security Question 1 *"
-                  value={securityQuestion1}
-                  options={question1Options}
-                  onChange={(e) => {
-                    setSecurityQuestion1(e.target.value);
-                    if (fieldErrors.securityQuestion1) {
-                      setFieldErrors((prev) => ({ ...prev, securityQuestion1: "" }));
-                    }
-                  }}
-                  error={fieldErrors.securityQuestion1}
-                  required
-                />
-                <AuthInput
-                  id="reg-input-sa1"
-                  label="Security Answer 1 *"
-                  placeholder="Your confidential answer"
-                  value={securityAnswer1}
-                  onChange={(e) => {
-                    setSecurityAnswer1(e.target.value);
-                    if (fieldErrors.securityAnswer1) {
-                      setFieldErrors((prev) => ({ ...prev, securityAnswer1: "" }));
-                    }
-                  }}
-                  error={fieldErrors.securityAnswer1}
-                  required
-                />
-              </div>
-
-              {/* Security Question 2 */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3.5">
-                <AuthSelect
-                  id="reg-select-sq2"
-                  label="Security Question 2 *"
-                  value={securityQuestion2}
-                  options={question2Options}
-                  onChange={(e) => {
-                    setSecurityQuestion2(e.target.value);
-                    if (fieldErrors.securityQuestion2) {
-                      setFieldErrors((prev) => ({ ...prev, securityQuestion2: "" }));
-                    }
-                  }}
-                  error={fieldErrors.securityQuestion2}
-                  required
-                />
-                <AuthInput
-                  id="reg-input-sa2"
-                  label="Security Answer 2 *"
-                  placeholder="Your confidential answer"
-                  value={securityAnswer2}
-                  onChange={(e) => {
-                    setSecurityAnswer2(e.target.value);
-                    if (fieldErrors.securityAnswer2) {
-                      setFieldErrors((prev) => ({ ...prev, securityAnswer2: "" }));
-                    }
-                  }}
-                  error={fieldErrors.securityAnswer2}
-                  required
-                />
               </div>
             </div>
           </div>

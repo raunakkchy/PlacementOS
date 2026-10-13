@@ -103,7 +103,6 @@ export interface User {
   resumeFileName?: string;
   resumeUploadedAt?: string;
   resumeText?: string;
-  securityQuestionsConfigured?: boolean;
   onboardingCompleted?: boolean;
   careerPreferences?: CareerPreferences;
   skillsWithLevels?: SkillWithLevel[];
