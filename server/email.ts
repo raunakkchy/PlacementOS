@@ -1,4 +1,5 @@
-import nodemailer, { Transporter } from "nodemailer";
+import "dotenv/config";
+import nodemailer, { type Transporter } from "nodemailer";
 
 interface SendOtpEmailParams {
   to: string;
@@ -44,36 +45,28 @@ function getMailTransporter(): Transporter | null {
   }
 
   if (!transporter) {
-    const rawPort = cleanEnvString(process.env.SMTP_PORT);
-    // On cloud platforms (Render, Railway, AWS), port 587 STARTTLS is frequently throttled or blocked, causing 15-30s hangs.
-    // Port 465 with direct SSL connects in < 1 second.
-    // If Gmail is detected and port is either 587, 465, or unset, use port 465 with SSL.
-    const port = rawPort ? Number(rawPort) : (isGmail ? 465 : 587);
-    const usePort = isGmail && (port === 587 || !rawPort) ? 465 : port;
-    const secure = usePort === 465;
-
     if (isGmail) {
+      // Nodemailer's built-in "gmail" service with strict timeouts to prevent hanging on restricted hosts like Render
       transporter = nodemailer.createTransport({
-        host: host || "smtp.gmail.com",
-        port: usePort,
-        secure,
+        service: "gmail",
         auth: { user, pass },
-        connectionTimeout: 10000, // 10s connection timeout
+        connectionTimeout: 8000,
         greetingTimeout: 8000,
-        socketTimeout: 15000,
-        tls: {
-          rejectUnauthorized: false,
-        },
+        socketTimeout: 10000,
       });
     } else {
+      const rawPort = cleanEnvString(process.env.SMTP_PORT);
+      const port = rawPort ? Number(rawPort) : 587;
+      const secure = port === 465;
+
       transporter = nodemailer.createTransport({
         host,
         port,
         secure,
         auth: { user, pass },
-        connectionTimeout: 10000,
+        connectionTimeout: 8000,
         greetingTimeout: 8000,
-        socketTimeout: 15000,
+        socketTimeout: 10000,
         tls: {
           rejectUnauthorized: false,
         },
@@ -82,6 +75,85 @@ function getMailTransporter(): Transporter | null {
   }
 
   return transporter;
+}
+
+/**
+ * Sends email over HTTP REST API (HTTPS Port 443).
+ * This completely bypasses Render Free Tier's outbound SMTP block on ports 25, 465, and 587.
+ */
+async function sendViaHttpApi({
+  to,
+  subject,
+  textContent,
+  htmlContent,
+  fromEmail,
+}: {
+  to: string;
+  subject: string;
+  textContent: string;
+  htmlContent: string;
+  fromEmail?: string;
+}): Promise<boolean> {
+  const resendApiKey = cleanEnvString(process.env.RESEND_API_KEY);
+  if (resendApiKey) {
+    try {
+      const resendFrom = cleanEnvString(process.env.RESEND_FROM) || "Placement OS <onboarding@resend.dev>";
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: resendFrom,
+          to: [to],
+          subject,
+          text: textContent,
+          html: htmlContent,
+        }),
+      });
+      if (resp.ok) {
+        console.log(`[Email Service] Delivered via Resend HTTP API to ${maskEmail(to)}`);
+        return true;
+      }
+      const errText = await resp.text();
+      console.error(`[Email Service] Resend API error:`, errText);
+    } catch (err: any) {
+      console.error(`[Email Service] Resend request failed:`, err.message);
+    }
+  }
+
+  const brevoApiKey = cleanEnvString(process.env.BREVO_API_KEY);
+  if (brevoApiKey) {
+    try {
+      const senderEmail = fromEmail || cleanEnvString(process.env.SMTP_USER) || "noreply@placementos.com";
+      const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "api-key": brevoApiKey,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({
+          sender: { name: "Placement OS", email: senderEmail },
+          to: [{ email: to }],
+          subject,
+          textContent,
+          htmlContent,
+        }),
+      });
+      if (resp.ok) {
+        console.log(`[Email Service] Delivered via Brevo HTTP API to ${maskEmail(to)}`);
+        return true;
+      }
+      const errText = await resp.text();
+      console.error(`[Email Service] Brevo API error:`, errText);
+    } catch (err: any) {
+      console.error(`[Email Service] Brevo request failed:`, err.message);
+    }
+  }
+
+  return false;
 }
 
 function maskEmail(email: string): string {
@@ -162,6 +234,20 @@ export async function sendOtpEmail({ to, otp }: SendOtpEmailParams): Promise<boo
 </html>
   `.trim();
 
+  // 1. Try sending via HTTP Email API (Resend / Brevo) first if configured
+  // HTTP APIs use HTTPS port 443 which is NEVER blocked by Render Free Tier
+  if (process.env.RESEND_API_KEY || process.env.BREVO_API_KEY) {
+    const sentViaHttp = await sendViaHttpApi({
+      to,
+      subject,
+      textContent,
+      htmlContent,
+      fromEmail: smtpUser,
+    });
+    if (sentViaHttp) return true;
+  }
+
+  // 2. Try SMTP
   if (mailTransporter) {
     try {
       await mailTransporter.sendMail({
@@ -176,10 +262,11 @@ export async function sendOtpEmail({ to, otp }: SendOtpEmailParams): Promise<boo
       return true;
     } catch (err: any) {
       console.error(`[Email Service] Failed to send email to ${maskEmail(to)} via SMTP:`, err.message);
+      transporter = null;
       if (err.message?.includes("Username and Password not accepted") || err.code === "EAUTH") {
         console.error("[Email Service Hint] Gmail authentication failed. Ensure you use a 16-character Google App Password (not your normal Gmail password) and that 2-Step Verification is active.");
       } else if (err.code === "ETIMEDOUT" || err.code === "ESOCKET" || err.message?.includes("timeout")) {
-        console.error("[Email Service Hint] Connection timed out. On Render, set SMTP_PORT=465 in Environment Variables for direct SSL.");
+        console.error("[Email Service Hint] Connection timed out! Render Free Tier blocks outbound SMTP traffic on ports 25, 465, and 587. Recommendation: Add RESEND_API_KEY (from https://resend.com) to your Render Environment Variables to send over HTTPS port 443.");
       }
       return false;
     }
@@ -266,6 +353,20 @@ export async function sendRegistrationOtpEmail({
 </html>
   `.trim();
 
+  // 1. Try sending via HTTP Email API (Resend / Brevo) first if configured
+  // HTTP APIs use HTTPS port 443 which is NEVER blocked by Render Free Tier
+  if (process.env.RESEND_API_KEY || process.env.BREVO_API_KEY) {
+    const sentViaHttp = await sendViaHttpApi({
+      to,
+      subject,
+      textContent,
+      htmlContent,
+      fromEmail: smtpUser,
+    });
+    if (sentViaHttp) return true;
+  }
+
+  // 2. Try SMTP
   if (mailTransporter) {
     try {
       await mailTransporter.sendMail({
@@ -280,10 +381,11 @@ export async function sendRegistrationOtpEmail({
       return true;
     } catch (err: any) {
       console.error(`[Email Service] Failed to send registration email to ${maskEmail(to)} via SMTP:`, err.message);
+      transporter = null;
       if (err.message?.includes("Username and Password not accepted") || err.code === "EAUTH") {
         console.error("[Email Service Hint] Gmail authentication failed. Ensure you use a 16-character Google App Password (not your normal Gmail password) and that 2-Step Verification is active.");
       } else if (err.code === "ETIMEDOUT" || err.code === "ESOCKET" || err.message?.includes("timeout")) {
-        console.error("[Email Service Hint] Connection timed out. On Render, set SMTP_PORT=465 in Environment Variables for direct SSL.");
+        console.error("[Email Service Hint] Connection timed out! Render Free Tier blocks outbound SMTP traffic on ports 25, 465, and 587. Recommendation: Add RESEND_API_KEY (from https://resend.com) to your Render Environment Variables to send over HTTPS port 443.");
       }
       return false;
     }
