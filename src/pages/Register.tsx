@@ -215,7 +215,7 @@ export const Register: React.FC<RegisterProps> = ({
     return Object.keys(errors).length === 0;
   };
 
-  // Step 1: Validate form and dispatch 6-digit registration OTP to student email
+  // Registration (OTP verification temporarily bypassed)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -228,19 +228,37 @@ export const Register: React.FC<RegisterProps> = ({
 
     setLoading(true);
 
+    const finalBranch =
+      branch === "Other" && otherBranch.trim()
+        ? otherBranch.trim()
+        : branch.trim();
+
     try {
-      await sendRegistrationOtp({
-        email: email.trim().toLowerCase(),
+      const response = await registerStudent({
         fullName: fullName.trim(),
+        email: email.trim().toLowerCase(),
         rollNumber: rollNumber.trim(),
+        course,
+        semester: Number(semester),
+        branch: finalBranch,
+        college: college.trim(),
+        graduationYear: new Date().getFullYear() + ((course === "Diploma" || course === "BCA" ? 3 : 4) - Math.ceil(Number(semester) / 2)),
+        cgpa: parseFloat(cgpa),
+        password,
+        confirmPassword,
       });
 
-      setOtpDigits(Array(6).fill(""));
-      setOtpError(null);
-      setOtpCooldown(60);
-      setShowOtpModal(true);
+      setSuccessMsg("Account created successfully! Preparing your Placement OS...");
+
+      setTimeout(() => {
+        if (onSuccess) {
+          onSuccess(response);
+        } else if (onLoginSuccess) {
+          onLoginSuccess(response.user);
+        }
+      }, 700);
     } catch (err: any) {
-      const msg = err.message || "Failed to send verification code. Please check your details and try again.";
+      const msg = err.message || "Registration failed. Please try again.";
       setErrorMsg(msg);
       if (msg.toLowerCase().includes("roll")) {
         setFieldErrors((prev) => ({ ...prev, rollNumber: msg }));
