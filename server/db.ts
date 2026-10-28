@@ -80,26 +80,98 @@ export interface AiProfileAnalysis {
   analyzedAt: string;
 }
 
+export interface CollegeDocument {
+  id: string;
+  name: string;
+  code?: string;
+  domain?: string;
+  website?: string;
+  city: string;
+  state: string;
+  country?: string;
+  officerName: string;
+  officerEmail: string;
+  officerPhone?: string;
+  officerDesignation?: string;
+  officerUserId: string;
+  status: "pending" | "verified" | "rejected" | "suspended";
+  verificationMethod?: string;
+  submittedAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewNotes?: string;
+  rejectionReason?: string;
+  suspensionReason?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  inviteCode?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GranularConsent {
+  shareAcademic: boolean;
+  shareSkillRoadmap: boolean;
+  shareInterviewScores: boolean;
+  consentGivenAt: string;
+  consentVersion: string;
+}
+
+export interface CollegeInvitationDocument {
+  id: string;
+  collegeId: string;
+  createdBy: string;
+  code: string;
+  label?: string;
+  maxUses: number;
+  usedCount: number;
+  expiresAt: string;
+  status: "active" | "revoked" | "expired";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollegeMembershipDocument {
+  id: string;
+  studentId: string;
+  collegeId: string;
+  invitationId?: string;
+  invitationCode?: string;
+  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+  consent: GranularConsent;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UserDocument {
   id: string;
   email: string;
   passwordHash: string;
   fullName: string;
+  role?: "student" | "placement_officer" | "admin";
+  collegeId?: string;
+  verificationStatus?: "pending" | "verified" | "rejected" | "suspended";
+  designation?: string;
   phone?: string;
   profilePhoto?: string;
   rollNumber?: string;
-  college: string;
-  course: string; // e.g. B.Tech, B.E., MCA, BCA
-  branch: string; // e.g. Computer Science, Information Technology, Electronics & Comm.
-  semester: number; // 1-8
-  cgpa: number; // e.g. 8.4
+  college?: string;
+  course?: string; // e.g. B.Tech, B.E., MCA, BCA
+  branch?: string; // e.g. Computer Science, Information Technology, Electronics & Comm.
+  semester?: number; // 1-8
+  cgpa?: number; // e.g. 8.4
   tenthMarks?: number; // e.g. 92%
   twelfthMarks?: number; // e.g. 89%
-  graduationYear: number;
+  graduationYear?: number;
   courseDuration?: string;
-  backlogs: number;
-  skills: string[];
-  targetRoles: string[];
+  backlogs?: number;
+  skills?: string[];
+  targetRoles?: string[];
   selectedRole?: string;
   roleSelectedAt?: string;
   aiJobRecommendations?: StudentAiRecommendations;
@@ -115,6 +187,7 @@ export interface UserDocument {
   createdAt: string;
   updatedAt: string;
 }
+
 
 export interface JobDocument {
   id: string;
@@ -372,17 +445,31 @@ const UserSchema = new Schema<UserDocument>(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     passwordHash: { type: String, required: true },
     fullName: { type: String, required: true, trim: true },
+    role: {
+      type: String,
+      enum: ["student", "placement_officer", "admin"],
+      default: "student",
+      index: true,
+    },
+    collegeId: { type: String, index: true },
+    verificationStatus: {
+      type: String,
+      enum: ["pending", "verified", "rejected", "suspended"],
+      default: "verified",
+      index: true,
+    },
+    designation: { type: String },
     phone: { type: String, default: "" },
     profilePhoto: { type: String, default: "" },
     rollNumber: { type: String, index: true, sparse: true, trim: true },
-    college: { type: String, required: true },
-    course: { type: String, required: true },
-    branch: { type: String, required: true },
-    semester: { type: Number, required: true },
-    cgpa: { type: Number, required: true },
+    college: { type: String, default: "Independent Learner" },
+    course: { type: String, default: "" },
+    branch: { type: String, default: "" },
+    semester: { type: Number, default: 1 },
+    cgpa: { type: Number, default: 0 },
     tenthMarks: { type: Number },
     twelfthMarks: { type: Number },
-    graduationYear: { type: Number, required: true },
+    graduationYear: { type: Number, default: () => new Date().getFullYear() },
     courseDuration: { type: String },
     backlogs: { type: Number, default: 0 },
     skills: [{ type: String }],
@@ -671,6 +758,55 @@ export const RoadmapModel: Model<RoadmapDocument> = (mongoose.models.Roadmap as 
 export const InterviewModel: Model<InterviewDocument> = (mongoose.models.Interview as Model<InterviewDocument>) || mongoose.model<InterviewDocument>("Interview", InterviewSchema);
 export const ReadinessScoreModel: Model<ReadinessScoreDocument> = (mongoose.models.ReadinessScore as Model<ReadinessScoreDocument>) || mongoose.model<ReadinessScoreDocument>("ReadinessScore", ReadinessScoreSchema);
 
+const CollegeSchema = new Schema<CollegeDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true, trim: true, index: true },
+    code: { type: String, trim: true, uppercase: true },
+    domain: { type: String, trim: true, lowercase: true },
+    website: { type: String, trim: true },
+    city: { type: String, required: true, trim: true },
+    state: { type: String, required: true, trim: true },
+    country: { type: String, default: "India", trim: true },
+    officerName: { type: String, required: true, trim: true },
+    officerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    officerPhone: { type: String, trim: true },
+    officerDesignation: { type: String, trim: true },
+    officerUserId: { type: String, required: true, index: true },
+    status: {
+      type: String,
+      enum: ["pending", "verified", "rejected", "suspended"],
+      default: "pending",
+      index: true,
+    },
+    verificationMethod: { type: String, trim: true },
+    submittedAt: { type: String, default: () => new Date().toISOString() },
+    reviewedAt: { type: String },
+    reviewedBy: { type: String },
+    reviewedByName: { type: String },
+    reviewNotes: { type: String },
+    rejectionReason: { type: String },
+    suspensionReason: { type: String },
+    verifiedAt: { type: String },
+    verifiedBy: { type: String },
+    inviteCode: { type: String, index: true },
+    createdAt: { type: String, default: () => new Date().toISOString() },
+    updatedAt: { type: String, default: () => new Date().toISOString() },
+  },
+  {
+    versionKey: false,
+  }
+);
+
+CollegeSchema.index({ id: 1 }, { unique: true });
+CollegeSchema.index({ officerUserId: 1 });
+CollegeSchema.index({ officerEmail: 1 });
+CollegeSchema.index({ status: 1 });
+
+export const CollegeModel: Model<CollegeDocument> =
+  (mongoose.models.College as Model<CollegeDocument>) ||
+  mongoose.model<CollegeDocument>("College", CollegeSchema);
+
 const PasswordResetSchema = new Schema<PasswordResetDocument>(
   {
     id: { type: String, required: true, unique: true, index: true },
@@ -721,6 +857,177 @@ export const RegistrationOtpModel: Model<RegistrationOtpDocument> =
   mongoose.model<RegistrationOtpDocument>("RegistrationOtp", RegistrationOtpSchema);
 
 // ----------------------------------------------------
+// COLLEGE INVITATIONS SCHEMA & MODEL (Phase 4)
+// ----------------------------------------------------
+const CollegeInvitationSchema = new Schema<CollegeInvitationDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    collegeId: { type: String, required: true, index: true },
+    createdBy: { type: String, required: true },
+    code: { type: String, required: true, unique: true, uppercase: true, trim: true, index: true },
+    label: { type: String, default: "" },
+    maxUses: { type: Number, default: 100 },
+    usedCount: { type: Number, default: 0 },
+    expiresAt: { type: String, required: true, index: true },
+    status: {
+      type: String,
+      enum: ["active", "revoked", "expired"],
+      default: "active",
+      index: true,
+    },
+    createdAt: { type: String, default: () => new Date().toISOString() },
+    updatedAt: { type: String, default: () => new Date().toISOString() },
+  },
+  {
+    versionKey: false,
+  }
+);
+
+CollegeInvitationSchema.index({ code: 1 }, { unique: true });
+CollegeInvitationSchema.index({ collegeId: 1, createdAt: -1 });
+
+export const CollegeInvitationModel: Model<CollegeInvitationDocument> =
+  (mongoose.models.CollegeInvitation as Model<CollegeInvitationDocument>) ||
+  mongoose.model<CollegeInvitationDocument>("CollegeInvitation", CollegeInvitationSchema);
+
+// ----------------------------------------------------
+// COLLEGE MEMBERSHIPS SCHEMA & MODEL (Phase 4)
+// ----------------------------------------------------
+const CollegeMembershipSchema = new Schema<CollegeMembershipDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    studentId: { type: String, required: true, index: true },
+    collegeId: { type: String, required: true, index: true },
+    invitationId: { type: String, index: true },
+    invitationCode: { type: String },
+    status: {
+      type: String,
+      enum: ["pending", "active", "rejected", "revoked", "removed"],
+      default: "pending",
+      index: true,
+    },
+    requestedAt: { type: String, default: () => new Date().toISOString() },
+    reviewedAt: { type: String },
+    reviewedBy: { type: String },
+    rejectionReason: { type: String },
+    consent: {
+      shareAcademic: { type: Boolean, default: true },
+      shareSkillRoadmap: { type: Boolean, default: true },
+      shareInterviewScores: { type: Boolean, default: true },
+      consentGivenAt: { type: String, default: () => new Date().toISOString() },
+      consentVersion: { type: String, default: "1.0" },
+    },
+    createdAt: { type: String, default: () => new Date().toISOString() },
+    updatedAt: { type: String, default: () => new Date().toISOString() },
+  },
+  {
+    versionKey: false,
+  }
+);
+
+CollegeMembershipSchema.index({ studentId: 1, collegeId: 1 });
+CollegeMembershipSchema.index({ collegeId: 1, status: 1 });
+CollegeMembershipSchema.index({ studentId: 1, status: 1 });
+
+export const CollegeMembershipModel: Model<CollegeMembershipDocument> =
+  (mongoose.models.CollegeMembership as Model<CollegeMembershipDocument>) ||
+  mongoose.model<CollegeMembershipDocument>("CollegeMembership", CollegeMembershipSchema);
+
+// ----------------------------------------------------
+// SANITIZE STUDENT FOR COLLEGE (Enforces Strict Data Minimization & Consent)
+// ----------------------------------------------------
+export function sanitizeStudentForCollege(
+  student: UserDocument,
+  membership: CollegeMembershipDocument,
+  score?: ReadinessScoreDocument | null,
+  roadmap?: RoadmapDocument | null,
+  interview?: InterviewDocument | null
+): any {
+  if (!student || !membership) return null;
+
+  const consent = membership.consent || {
+    shareAcademic: false,
+    shareSkillRoadmap: false,
+    shareInterviewScores: false,
+    consentGivenAt: membership.requestedAt,
+    consentVersion: "1.0",
+  };
+
+  const record: any = {
+    membershipId: membership.id,
+    status: membership.status,
+    requestedAt: membership.requestedAt,
+    reviewedAt: membership.reviewedAt,
+    rejectionReason: membership.rejectionReason,
+    studentId: student.id,
+    fullName: student.fullName,
+    email: student.email,
+    profilePhoto: student.profilePhoto || "",
+    consent,
+  };
+
+  // Academic Info: ONLY if shareAcademic is true
+  if (consent.shareAcademic) {
+    record.rollNumber = student.rollNumber || "";
+    record.course = student.course || "";
+    record.branch = student.branch || "";
+    record.semester = student.semester ?? 1;
+    record.cgpa = student.cgpa ?? 0;
+    record.backlogs = student.backlogs ?? 0;
+    record.graduationYear = student.graduationYear ?? new Date().getFullYear();
+    record.tenthMarks = student.tenthMarks;
+    record.twelfthMarks = student.twelfthMarks;
+  } else {
+    record.rollNumber = null;
+    record.course = null;
+    record.branch = null;
+    record.semester = null;
+    record.cgpa = null;
+    record.backlogs = null;
+    record.graduationYear = null;
+  }
+
+  // Skill & Roadmap Info: ONLY if shareSkillRoadmap is true
+  if (consent.shareSkillRoadmap) {
+    record.skills = student.skills || [];
+    record.selectedRole = student.selectedRole || "";
+    record.roadmapOverallProgress = roadmap?.overallProgress ?? 0;
+    record.completedTasks = roadmap?.completedTasks ?? 0;
+    record.totalTasks = roadmap?.totalTasks ?? 0;
+    record.skillGaps = roadmap?.skillGap?.missing || [];
+  } else {
+    record.skills = [];
+    record.selectedRole = null;
+    record.roadmapOverallProgress = null;
+    record.completedTasks = null;
+    record.totalTasks = null;
+    record.skillGaps = [];
+  }
+
+  // Interview Scores: ONLY if shareInterviewScores is true
+  if (consent.shareInterviewScores) {
+    record.readinessScore = score?.overallScore ?? null;
+    record.jobReadinessPercentage = score?.jobReadinessPercentage ?? null;
+    record.interviewReadinessScore = score?.interviewReadinessScore ?? null;
+    record.technicalSkillsScore = score?.technicalSkillsScore ?? null;
+    record.communicationScore = score?.communicationScore ?? null;
+    record.lastInterviewScore = interview?.overallScore ?? null;
+    record.lastInterviewDate = interview?.conductedAt ?? null;
+  } else {
+    record.readinessScore = null;
+    record.jobReadinessPercentage = null;
+    record.interviewReadinessScore = null;
+    record.technicalSkillsScore = null;
+    record.communicationScore = null;
+    record.lastInterviewScore = null;
+    record.lastInterviewDate = null;
+  }
+
+  // NEVER EXPORT: passwordHash, tokens, resume files, raw interview transcripts, security questions
+  return record;
+}
+
+// ----------------------------------------------------
 // SANITIZE USER HELPER (Removes Sensitive Fields)
 // ----------------------------------------------------
 export function sanitizeUser(user: any): any {
@@ -730,7 +1037,24 @@ export function sanitizeUser(user: any): any {
   delete userObj.passwordHash;
   delete userObj.securityQuestions;
   delete userObj.securityQuestionsConfigured;
+  if (!userObj.role) userObj.role = "student";
+  if (!userObj.verificationStatus) userObj.verificationStatus = "verified";
   return userObj;
+}
+
+// ----------------------------------------------------
+// SANITIZE COLLEGE HELPER (Hides Internal Review Notes From Non-Admins)
+// ----------------------------------------------------
+export function sanitizeCollege(college: any, isAdmin: boolean = false): any {
+  if (!college) return null;
+  const colObj = college.toObject ? college.toObject() : { ...college };
+  delete colObj._id;
+  colObj.verificationStatus = colObj.status || "pending";
+  if (!isAdmin) {
+    // Restrict internal security & review notes
+    delete colObj.reviewNotes;
+  }
+  return colObj;
 }
 
 // ----------------------------------------------------
@@ -1133,15 +1457,23 @@ async function seedDefaultJobs(): Promise<void> {
 // Helper to seed default active student profile if database is fresh
 export async function seedDefaultStudent(): Promise<void> {
   try {
-    const count = await UserModel.countDocuments();
-    if (count === 0) {
+    const validHash = "$2b$10$Zln48d6JP1P3jF5x2f4UG.UFB5d8cDty4gsxAQQ9FMpADeXfqTroy"; // bcrypt hash of Password@123
+    const existingStudent = await UserModel.findOne({ email: "raunakkchy@gmail.com" }).exec();
+    if (existingStudent) {
+      if (existingStudent.passwordHash !== validHash) {
+        existingStudent.passwordHash = validHash;
+        await existingStudent.save();
+      }
+    } else {
       const demoId = "student-raunak-default";
       const demoEmail = "raunakkchy@gmail.com";
       const demoUser: UserDocument = {
         id: demoId,
         email: demoEmail,
-        passwordHash: "$2a$10$nOuIs54PNSTm79wqvi5zNu4rVuVWBk2X.XF/XG1M1lUjE3W1N6.S6", // Precomputed hash for Password@123
+        passwordHash: validHash,
         fullName: "Raunak Chaudhary",
+        role: "student",
+        verificationStatus: "verified",
         phone: "+91 9876543210",
         rollNumber: "21CS042",
         college: "National Institute of Technology",
@@ -1203,7 +1535,6 @@ export async function seedDefaultStudent(): Promise<void> {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-
       await UserModel.create(demoUser);
 
       // Create persistent session
@@ -1218,6 +1549,49 @@ export async function seedDefaultStudent(): Promise<void> {
     }
   } catch (err: any) {
     console.error("[MongoDB] Error checking/seeding student profile:", err.message);
+  }
+}
+
+// Helper to seed platform administrator if database has no admin account
+export async function seedDefaultAdmin(): Promise<void> {
+  try {
+    const validHash = "$2b$10$Zln48d6JP1P3jF5x2f4UG.UFB5d8cDty4gsxAQQ9FMpADeXfqTroy"; // bcrypt hash of Password@123
+    const existingAdmin = await UserModel.findOne({ role: "admin" }).exec();
+    if (existingAdmin) {
+      if (existingAdmin.passwordHash !== validHash) {
+        existingAdmin.passwordHash = validHash;
+        await existingAdmin.save();
+      }
+    } else {
+      const adminId = "admin-platform-root";
+      const adminEmail = "admin@placementos.com";
+      const adminUser: UserDocument = {
+        id: adminId,
+        email: adminEmail,
+        passwordHash: validHash,
+        fullName: "Placement OS Operations Admin",
+        role: "admin",
+        verificationStatus: "verified",
+        phone: "+91 9999900000",
+        designation: "Platform Verification Director",
+        college: "Placement OS Headquarters",
+        course: "Administration",
+        branch: "Operations",
+        semester: 1,
+        cgpa: 10,
+        backlogs: 0,
+        skills: ["Verification", "Compliance", "Security Review"],
+        targetRoles: ["Platform Administrator"],
+        onboardingCompleted: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await UserModel.create(adminUser);
+      console.log(`[MongoDB] Initialized default platform administrator (${adminEmail})`);
+    }
+  } catch (err: any) {
+    console.error("[MongoDB] Error checking/seeding platform admin:", err.message);
   }
 }
 
@@ -1271,6 +1645,146 @@ export const db = {
         InterviewModel.deleteMany({ userId }).exec(),
         ReadinessScoreModel.deleteMany({ userId }).exec(),
       ]);
+    },
+  },
+
+  // Colleges
+  colleges: {
+    find: async (query: any): Promise<CollegeDocument[]> => {
+      const docs = await CollegeModel.find(query).sort({ createdAt: -1 }).lean().exec();
+      return docs as unknown as CollegeDocument[];
+    },
+    findById: async (id: string): Promise<CollegeDocument | null> => {
+      const doc = await CollegeModel.findOne({ id }).lean().exec();
+      return doc as unknown as CollegeDocument | null;
+    },
+    findByOfficerUserId: async (officerUserId: string): Promise<CollegeDocument | null> => {
+      const doc = await CollegeModel.findOne({ officerUserId }).lean().exec();
+      return doc as unknown as CollegeDocument | null;
+    },
+    findByEmail: async (email: string): Promise<CollegeDocument | null> => {
+      const doc = await CollegeModel.findOne({ officerEmail: email.toLowerCase().trim() }).lean().exec();
+      return doc as unknown as CollegeDocument | null;
+    },
+    findByName: async (name: string): Promise<CollegeDocument | null> => {
+      const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const doc = await CollegeModel.findOne({ name: new RegExp(`^${escaped}$`, "i") }).lean().exec();
+      return doc as unknown as CollegeDocument | null;
+    },
+    all: async (): Promise<CollegeDocument[]> => {
+      const docs = await CollegeModel.find({}).sort({ createdAt: -1 }).lean().exec();
+      return docs as unknown as CollegeDocument[];
+    },
+    create: async (college: CollegeDocument): Promise<CollegeDocument> => {
+      const doc = await CollegeModel.create(college);
+      return doc.toObject() as unknown as CollegeDocument;
+    },
+    update: async (id: string, updates: Partial<CollegeDocument>): Promise<CollegeDocument | null> => {
+      const updated = await CollegeModel.findOneAndUpdate(
+        { id },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeDocument | null;
+    },
+  },
+
+  // Invitations (Phase 4)
+  invitations: {
+    create: async (data: CollegeInvitationDocument): Promise<CollegeInvitationDocument> => {
+      const doc = await CollegeInvitationModel.create(data);
+      return doc.toObject() as unknown as CollegeInvitationDocument;
+    },
+    findById: async (id: string): Promise<CollegeInvitationDocument | null> => {
+      const doc = await CollegeInvitationModel.findOne({ id }).lean().exec();
+      return doc as unknown as CollegeInvitationDocument | null;
+    },
+    findByCode: async (code: string): Promise<CollegeInvitationDocument | null> => {
+      const cleanCode = code.trim().toUpperCase();
+      const doc = await CollegeInvitationModel.findOne({ code: cleanCode }).lean().exec();
+      return doc as unknown as CollegeInvitationDocument | null;
+    },
+    findByCollege: async (collegeId: string): Promise<CollegeInvitationDocument[]> => {
+      const docs = await CollegeInvitationModel.find({ collegeId }).sort({ createdAt: -1 }).lean().exec();
+      return docs as unknown as CollegeInvitationDocument[];
+    },
+    incrementUsed: async (id: string): Promise<CollegeInvitationDocument | null> => {
+      const updated = await CollegeInvitationModel.findOneAndUpdate(
+        { id },
+        { $inc: { usedCount: 1 }, $set: { updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeInvitationDocument | null;
+    },
+    update: async (id: string, updates: Partial<CollegeInvitationDocument>): Promise<CollegeInvitationDocument | null> => {
+      const updated = await CollegeInvitationModel.findOneAndUpdate(
+        { id },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeInvitationDocument | null;
+    },
+    revoke: async (id: string): Promise<CollegeInvitationDocument | null> => {
+      const updated = await CollegeInvitationModel.findOneAndUpdate(
+        { id },
+        { $set: { status: "revoked", updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeInvitationDocument | null;
+    },
+  },
+
+  // Memberships (Phase 4)
+  memberships: {
+    create: async (data: CollegeMembershipDocument): Promise<CollegeMembershipDocument> => {
+      const doc = await CollegeMembershipModel.create(data);
+      return doc.toObject() as unknown as CollegeMembershipDocument;
+    },
+    findById: async (id: string): Promise<CollegeMembershipDocument | null> => {
+      const doc = await CollegeMembershipModel.findOne({ id }).lean().exec();
+      return doc as unknown as CollegeMembershipDocument | null;
+    },
+    findByStudentAndCollege: async (studentId: string, collegeId: string): Promise<CollegeMembershipDocument | null> => {
+      const doc = await CollegeMembershipModel.findOne({ studentId, collegeId }).lean().exec();
+      return doc as unknown as CollegeMembershipDocument | null;
+    },
+    findActiveOrPendingByStudent: async (studentId: string): Promise<CollegeMembershipDocument | null> => {
+      const doc = await CollegeMembershipModel.findOne({
+        studentId,
+        status: { $in: ["pending", "active"] },
+      }).lean().exec();
+      return doc as unknown as CollegeMembershipDocument | null;
+    },
+    findAllByStudent: async (studentId: string): Promise<CollegeMembershipDocument[]> => {
+      const docs = await CollegeMembershipModel.find({ studentId }).sort({ requestedAt: -1 }).lean().exec();
+      return docs as unknown as CollegeMembershipDocument[];
+    },
+    findByCollege: async (collegeId: string, status?: string): Promise<CollegeMembershipDocument[]> => {
+      const query: any = { collegeId };
+      if (status && status !== "all") {
+        query.status = status;
+      }
+      const docs = await CollegeMembershipModel.find(query).sort({ requestedAt: -1 }).lean().exec();
+      return docs as unknown as CollegeMembershipDocument[];
+    },
+    update: async (id: string, updates: Partial<CollegeMembershipDocument>): Promise<CollegeMembershipDocument | null> => {
+      const updated = await CollegeMembershipModel.findOneAndUpdate(
+        { id },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeMembershipDocument | null;
+    },
+    updateConsent: async (id: string, consent: GranularConsent): Promise<CollegeMembershipDocument | null> => {
+      const updated = await CollegeMembershipModel.findOneAndUpdate(
+        { id },
+        { $set: { consent, updatedAt: new Date().toISOString() } },
+        { new: true }
+      ).lean().exec();
+      return updated as unknown as CollegeMembershipDocument | null;
+    },
+    delete: async (id: string): Promise<void> => {
+      await CollegeMembershipModel.deleteOne({ id }).exec();
     },
   },
 
@@ -1567,6 +2081,7 @@ export async function initMongo(): Promise<void> {
       console.log("[MongoDB] Connected to configured MONGODB_URI database via Mongoose successfully.");
       await seedDefaultJobs();
       await seedDefaultStudent();
+      await seedDefaultAdmin();
       return;
     } catch (err: any) {
       console.error("[MongoDB Connection Error] Failed to connect to MONGODB_URI:", err.message);
@@ -1589,6 +2104,7 @@ export async function initMongo(): Promise<void> {
     console.log("[MongoDB] Started live in-memory MongoDB instance and connected via Mongoose.");
     await seedDefaultJobs();
     await seedDefaultStudent();
+    await seedDefaultAdmin();
   } catch (err: any) {
     console.error("[MongoDB Engine Error] Failed to initialize MongoDB:", err.message);
     throw err;

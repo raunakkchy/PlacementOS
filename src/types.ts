@@ -78,25 +78,177 @@ export interface AiProfileAnalysis {
   analyzedAt: string;
 }
 
+export interface College {
+  id: string;
+  name: string;
+  code?: string;
+  domain?: string;
+  website?: string;
+  city: string;
+  state: string;
+  country?: string;
+  officerName: string;
+  officerEmail: string;
+  officerPhone?: string;
+  officerDesignation?: string;
+  officerUserId: string;
+  status: "pending" | "verified" | "rejected" | "suspended";
+  verificationMethod?: string;
+  submittedAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewNotes?: string;
+  rejectionReason?: string;
+  suspensionReason?: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  inviteCode?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GranularConsent {
+  shareAcademic: boolean;
+  shareSkillRoadmap: boolean;
+  shareInterviewScores: boolean;
+  consentGivenAt: string;
+  consentVersion: string;
+}
+
+export interface CollegeInvitation {
+  id: string;
+  collegeId: string;
+  createdBy: string;
+  code: string;
+  label?: string;
+  maxUses: number;
+  usedCount: number;
+  expiresAt: string;
+  status: "active" | "revoked" | "expired";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollegeMembership {
+  id: string;
+  studentId: string;
+  collegeId: string;
+  invitationId?: string;
+  invitationCode?: string;
+  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+  consent: GranularConsent;
+  college?: College;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollegeStudentRosterItem {
+  membershipId: string;
+  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  requestedAt: string;
+  reviewedAt?: string;
+  consent: GranularConsent;
+  studentId: string;
+  fullName: string;
+  email: string;
+  profilePhoto?: string;
+  rollNumber?: string;
+  course?: string;
+  branch?: string;
+  semester?: number;
+  cgpa?: number;
+  backlogs?: number;
+  graduationYear?: number;
+  skills?: string[];
+  selectedRole?: string;
+  roadmapOverallProgress?: number;
+  completedTasks?: number;
+  totalTasks?: number;
+  skillGaps?: string[];
+  readinessScore?: number | null;
+  jobReadinessPercentage?: number | null;
+  interviewReadinessScore?: number | null;
+  technicalSkillsScore?: number | null;
+  communicationScore?: number | null;
+  lastInterviewScore?: number | null;
+  lastInterviewDate?: string | null;
+}
+
+export interface SkillGapSummary {
+  skill: string;
+  missingCount: number;
+  percentageOfCohort: number;
+  category?: string;
+}
+
+export interface ReadinessBandSummary {
+  bandName: string;
+  minScore: number;
+  maxScore: number;
+  studentCount: number;
+  percentage: number;
+}
+
+export interface CollegeDashboardAnalytics {
+  collegeId: string;
+  collegeName: string;
+  totalLinkedStudents: number;
+  activeLinkedStudents: number;
+  studentsWithConsent: number;
+  studentsWithReadinessData: number;
+  averageReadinessScore: number | null;
+  averageRoadmapProgress: number | null;
+  topMissingSkills: SkillGapSummary[];
+  readinessBands: ReadinessBandSummary[];
+  minimumGroupSizeThreshold: number;
+  anonymized: boolean;
+  generatedAt: string;
+}
+
+export interface CollegeRegisterData {
+  collegeName: string;
+  code?: string;
+  domain?: string;
+  website?: string;
+  city: string;
+  state: string;
+  country?: string;
+  officerName: string;
+  officerEmail: string;
+  officerPhone: string;
+  officerDesignation: string;
+  password: string;
+  confirmPassword?: string;
+}
+
 export interface User {
   id: string;
   email: string;
   fullName: string;
+  role?: "student" | "placement_officer" | "admin";
+  collegeId?: string;
+  verificationStatus?: "pending" | "verified" | "rejected" | "suspended";
+  designation?: string;
   phone?: string;
   profilePhoto?: string;
   rollNumber?: string;
-  college: string;
-  course: string;
-  branch: string;
-  semester: number;
-  cgpa: number;
+  college?: string;
+  course?: string;
+  branch?: string;
+  semester?: number;
+  cgpa?: number;
   tenthMarks?: number;
   twelfthMarks?: number;
-  graduationYear: number;
+  graduationYear?: number;
   courseDuration?: string;
-  backlogs: number;
-  skills: string[];
-  targetRoles: string[];
+  backlogs?: number;
+  skills?: string[];
+  targetRoles?: string[];
   selectedRole?: string;
   roleSelectedAt?: string;
   aiJobRecommendations?: StudentAiRecommendations;

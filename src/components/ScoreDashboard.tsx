@@ -23,6 +23,8 @@ import {
   Target,
   Briefcase,
   Layers,
+  Trophy,
+  Award,
 } from "lucide-react";
 
 interface ScoreDashboardProps {
@@ -927,6 +929,81 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
 
         {/* Right Rail: 4 Columns */}
         <div className="col-span-4 space-y-6">
+          {/* Hackathon Achievement Showcase */}
+          <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 p-6 text-white shadow-xl space-y-4 relative overflow-hidden border border-slate-700/60 group">
+            {/* Subtle background glow */}
+            <div className="absolute -right-12 -top-12 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none group-hover:bg-indigo-500/20 transition-all duration-500" />
+            
+            <div className="flex items-start justify-between relative z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800 border border-slate-600/60 text-amber-300 shadow-inner">
+                  <Trophy className="h-5 w-5 text-amber-300" />
+                </div>
+                <div>
+                  <div className="text-[11px] font-extrabold uppercase tracking-widest text-indigo-300">
+                    Hackathon Award
+                  </div>
+                  <h3 className="text-base font-extrabold text-white">
+                    2nd Position Winner
+                  </h3>
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/90 border border-slate-700 text-xs font-bold text-slate-200 shadow-sm">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                Silver Medalist
+              </span>
+            </div>
+
+            <div className="space-y-3 relative z-10 pt-1 border-t border-slate-800">
+              <div>
+                <h4 className="text-sm font-extrabold text-amber-200">
+                  SPARK IDEA HACKATHON
+                </h4>
+                <p className="text-xs text-slate-300 font-medium mt-0.5 leading-relaxed">
+                  <strong className="text-white">Winning Project:</strong> Placement OS — An AI-Powered Adaptive Career Readiness & Placement Platform
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-700/50">
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Team Name</div>
+                  <div className="font-extrabold text-white text-xs mt-0.5">RAUNAKCODER</div>
+                </div>
+                <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-700/50">
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Cash Prize</div>
+                  <div className="font-extrabold text-amber-300 text-xs mt-0.5">₹3,000 + Medal</div>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-300 space-y-1 bg-slate-800/40 rounded-xl p-3 border border-slate-700/40">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400 font-medium">Team Leader:</span>
+                  <span className="font-bold text-white">Raunak Chaudhary</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400 font-medium">Team Member:</span>
+                  <span className="font-bold text-white">Ashish Singh</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-700/50">
+                  <span className="text-slate-400 font-medium">Organized By:</span>
+                  <span className="font-bold text-indigo-200 text-right">Startup Cell, New Govt Poly, Patna-13</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 relative z-10">
+              <a
+                href="https://placement-os-g8m3.onrender.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+              >
+                <span>View Winning Project</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
+
           {/* AI Role Recommendations Card */}
           <div className="rounded-3xl bg-white p-6 border border-slate-200/80 shadow-sm space-y-4">
             <div className="flex items-center gap-2 text-slate-900 font-bold text-base">

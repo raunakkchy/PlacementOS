@@ -1,7 +1,8 @@
-import { User, ReadinessScore, SuggestedJobRole } from "../types";
+import { User, ReadinessScore, SuggestedJobRole, College } from "../types";
 
 export interface AuthResponse {
   user: User;
+  college?: College | null;
   token?: string;
   readinessScore?: ReadinessScore;
   suggestedJobs?: SuggestedJobRole[];
@@ -151,6 +152,137 @@ export async function registerStudent(
   }
 
   return data;
+}
+
+export async function registerCollege(
+  collegeData: Record<string, any>
+): Promise<AuthResponse & { college?: College }> {
+  const res = await fetch("/api/college/register", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify(collegeData),
+  });
+
+  const data = await parseApiResponse(res, "College registration failed.");
+
+  if (data.token) {
+    saveAuthToken(data.token, data.user?.email || collegeData.officerEmail);
+  }
+
+  return data;
+}
+
+export async function getCollegeStatus(): Promise<{
+  success: boolean;
+  role: string;
+  verificationStatus: string;
+  college: College | null;
+}> {
+  const res = await fetch("/api/college/status", {
+    headers: {
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+
+  return parseApiResponse(res, "Failed to retrieve college verification status.");
+}
+
+export interface AdminCollegesResponse {
+  success: boolean;
+  colleges: College[];
+  counts: {
+    all: number;
+    pending: number;
+    verified: number;
+    rejected: number;
+    suspended: number;
+  };
+}
+
+export async function getAdminColleges(params?: {
+  status?: string;
+  search?: string;
+}): Promise<AdminCollegesResponse> {
+  const query = new URLSearchParams();
+  if (params?.status && params.status !== "all") query.set("status", params.status);
+  if (params?.search) query.set("search", params.search);
+
+  const res = await fetch(`/api/admin/colleges?${query.toString()}`, {
+    headers: {
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+
+  return parseApiResponse(res, "Failed to fetch college applications.");
+}
+
+export async function getAdminCollege(
+  id: string
+): Promise<{ success: boolean; college: College; officer: User | null }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}`, {
+    headers: {
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+
+  return parseApiResponse(res, "Failed to fetch college details.");
+}
+
+export async function verifyCollege(
+  id: string,
+  data: { verificationMethod: string; reviewNotes?: string }
+): Promise<{ success: boolean; message: string; college: College }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}/verify`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+
+  return parseApiResponse(res, "Failed to verify college.");
+}
+
+export async function rejectCollege(
+  id: string,
+  data: { rejectionReason: string; reviewNotes?: string }
+): Promise<{ success: boolean; message: string; college: College }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}/reject`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+
+  return parseApiResponse(res, "Failed to reject college.");
+}
+
+export async function suspendCollege(
+  id: string,
+  data: { suspensionReason: string; reviewNotes?: string }
+): Promise<{ success: boolean; message: string; college: College }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}/suspend`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+
+  return parseApiResponse(res, "Failed to suspend college.");
 }
 
 export async function getCurrentUser(): Promise<AuthResponse | null> {
@@ -398,5 +530,266 @@ export async function resetPasswordWithOtp(payload: {
   const data = await parseApiResponse(res, "Failed to reset password. Please try again.");
   return data;
 }
+
+// ----------------------------------------------------
+// PHASE 4: STUDENT-COLLEGE LINKING & INVITATION APIS
+// ----------------------------------------------------
+
+export async function validateCollegeInvitationCode(code: string) {
+  const clean = encodeURIComponent(code.trim().toUpperCase());
+  const res = await fetch(`/api/invitations/validate/${clean}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Invalid or expired college invitation code.");
+}
+
+export async function linkStudentWithCollege(
+  code: string,
+  consent: {
+    shareAcademic?: boolean;
+    shareSkillRoadmap?: boolean;
+    shareInterviewScores?: boolean;
+  }
+) {
+  const res = await fetch("/api/student/link-college", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify({ code: code.trim().toUpperCase(), consent }),
+  });
+  return parseApiResponse(res, "Failed to link with college.");
+}
+
+export async function getStudentCollegeMembership() {
+  const res = await fetch("/api/student/college-membership", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to retrieve college membership.");
+}
+
+export async function updateStudentCollegeConsent(consent: {
+  shareAcademic?: boolean;
+  shareSkillRoadmap?: boolean;
+  shareInterviewScores?: boolean;
+}) {
+  const res = await fetch("/api/student/college-consent", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(consent),
+  });
+  return parseApiResponse(res, "Failed to update consent preferences.");
+}
+
+export async function disconnectStudentCollegeMembership() {
+  const res = await fetch("/api/student/college-membership", {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to disconnect from college.");
+}
+
+// Officer College APIs
+export async function getCollegeInvitations() {
+  const res = await fetch("/api/college/invitations", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to load college invitations.");
+}
+
+export async function createCollegeInvitation(data: {
+  label?: string;
+  maxUses?: number;
+  validityDays?: number;
+}) {
+  const res = await fetch("/api/college/invitations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+  return parseApiResponse(res, "Failed to generate invitation code.");
+}
+
+export async function revokeCollegeInvitation(id: string) {
+  const res = await fetch(`/api/college/invitations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to revoke invitation code.");
+}
+
+export async function getCollegeMemberships(status?: string, search?: string) {
+  const params = new URLSearchParams();
+  if (status && status !== "all") params.set("status", status);
+  if (search && search.trim()) params.set("search", search.trim());
+  const queryStr = params.toString() ? `?${params.toString()}` : "";
+
+  const res = await fetch(`/api/college/memberships${queryStr}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to fetch student cohort roster.");
+}
+
+export async function approveCollegeMembership(id: string) {
+  const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}/approve`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to approve student request.");
+}
+
+export async function rejectCollegeMembership(id: string, reason?: string) {
+  const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}/reject`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify({ reason }),
+  });
+  return parseApiResponse(res, "Failed to reject student request.");
+}
+
+export async function removeCollegeMembership(id: string) {
+  const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to remove student from cohort.");
+}
+
+// ----------------------------------------------------
+// PHASE 5: COLLEGE ANALYTICS & REPORT EXPORT APIS
+// ----------------------------------------------------
+
+export async function getCollegeAnalytics() {
+  const res = await fetch("/api/college/analytics", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to load college analytics.");
+}
+
+export async function getStudentProgressDetail(studentId: string) {
+  const res = await fetch(`/api/college/students/${encodeURIComponent(studentId)}/progress`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to load student progress detail.");
+}
+
+export async function downloadCollegeCsvReport() {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+    headers["x-session-token"] = token;
+  }
+
+  const res = await fetch("/api/college/reports/csv", {
+    method: "GET",
+    headers,
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || "Failed to download CSV report.");
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `PlacementOS_Cohort_Report_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+export async function downloadCollegePdfReport() {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+    headers["x-session-token"] = token;
+  }
+
+  const res = await fetch("/api/college/reports/pdf", {
+    method: "GET",
+    headers,
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || "Failed to download PDF report.");
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `PlacementOS_Analytics_Report_${new Date().toISOString().slice(0, 10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+
 
 

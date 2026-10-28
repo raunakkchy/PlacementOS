@@ -217,6 +217,17 @@ export const LoginForm: React.FC<LoginFormProps> = ({
             Sign Up
           </button>
         </div>
+
+        {/* College Placement Cell Link */}
+        <div className="pt-2 text-center text-[13px] text-[#737373]">
+          College Placement Cell?{" "}
+          <a
+            href="/college/register"
+            className="font-medium text-[#FF6B00] hover:underline transition-colors"
+          >
+            Register Institution
+          </a>
+        </div>
       </form>
     </div>
   );

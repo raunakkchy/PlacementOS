@@ -3,6 +3,7 @@ import { User, ReadinessScore, Roadmap, InterviewReport, DashboardData } from ".
 import { AppSidebar } from "./components/navigation/AppSidebar";
 import { AppHeader } from "./components/navigation/AppHeader";
 import { MobileBottomNav } from "./components/navigation/MobileBottomNav";
+import { Footer } from "./components/navigation/Footer";
 import { ScoreDashboard } from "./components/ScoreDashboard";
 import { AiJobRoleRecommendations } from "./components/AiJobRoleRecommendations";
 import { RoadmapView } from "./components/RoadmapView";
@@ -413,6 +414,9 @@ export default function App() {
               )}
             </div>
           </main>
+
+          {/* Footer - hidden during active real-time mock interview session */}
+          {!isInterviewActive && <Footer />}
 
           {/* Mobile Bottom Navigation Bar (320px - 1023px) - Hidden during active real-time interview */}
           {!isInterviewActive && (

@@ -3,11 +3,13 @@ import React from "react";
 interface PlacementLogoProps {
   size?: "xs" | "sm" | "md" | "lg";
   className?: string;
+  inverted?: boolean;
 }
 
 export const PlacementLogo: React.FC<PlacementLogoProps> = ({
   size = "md",
   className = "",
+  inverted = false,
 }) => {
   const iconSize = size === "xs" ? 15 : size === "sm" ? 18 : size === "lg" ? 26 : 22;
   const textSize =
@@ -28,7 +30,7 @@ export const PlacementLogo: React.FC<PlacementLogoProps> = ({
         viewBox="0 0 24 24"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className="text-[#111315] flex-shrink-0"
+        className={`${inverted ? "text-[#FF6B00]" : "text-[#111315]"} flex-shrink-0`}
         aria-hidden="true"
       >
         <circle
@@ -42,16 +44,21 @@ export const PlacementLogo: React.FC<PlacementLogoProps> = ({
           cx="12"
           cy="12"
           r="5"
-          stroke="currentColor"
+          stroke={inverted ? "#FFFFFF" : "currentColor"}
           strokeWidth="1.5"
           strokeDasharray="2 2"
         />
-        <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+        <circle cx="12" cy="12" r="2.2" fill={inverted ? "#FF6B00" : "currentColor"} />
       </svg>
 
-      <span className={`font-extrabold text-[#111315] font-mono sm:font-sans uppercase tracking-[0.14em] ${textSize}`}>
-        PLACEMENT OS
+      <span
+        className={`font-extrabold font-mono sm:font-sans uppercase tracking-[0.14em] ${textSize} ${
+          inverted ? "text-white" : "text-[#111315]"
+        }`}
+      >
+        PLACEMENT <span className={inverted ? "text-[#FF6B00]" : ""}>OS</span>
       </span>
     </div>
   );
 };
+

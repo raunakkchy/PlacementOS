@@ -51,6 +51,7 @@ import {
   changeStudentPassword,
 } from "../services/auth";
 import { DeleteAccountModal } from "./DeleteAccountModal";
+import { StudentCollegeSection } from "./StudentCollegeSection";
 
 interface ProfileDrawerProps {
   isOpen: boolean;
@@ -71,7 +72,8 @@ type TabKey =
   | "projects"
   | "experience"
   | "resume"
-  | "security";
+  | "security"
+  | "college";
 
 const COURSE_OPTIONS = ["B.Tech", "B.E.", "Diploma", "BCA", "MCA", "M.Tech"];
 
@@ -600,6 +602,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     { key: "projects", label: `Projects (${projects.length})`, icon: BookOpen },
     { key: "experience", label: "Experience", icon: Briefcase },
     { key: "resume", label: "Resume", icon: FileText },
+    { key: "college", label: "College Placement Cell", icon: Building2 },
     { key: "security", label: "Account & Security", icon: ShieldAlert },
   ];
 
@@ -1756,6 +1759,19 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB 8: COLLEGE PLACEMENT CELL */}
+          {activeTab === "college" && (
+            <div className="space-y-4">
+              <StudentCollegeSection
+                user={user}
+                onCollegeUpdated={(updatedCollegeName) => {
+                  setCollege(updatedCollegeName);
+                  user.college = updatedCollegeName;
+                }}
+              />
             </div>
           )}
         </div>

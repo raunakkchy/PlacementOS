@@ -2,7 +2,8 @@ import React from "react";
 import { Check } from "lucide-react";
 
 interface PasswordStrengthIndicatorProps {
-  password: string;
+  password?: string;
+  evaluation?: PasswordChecks;
 }
 
 export interface PasswordChecks {
@@ -15,12 +16,13 @@ export interface PasswordChecks {
   isValid: boolean;
 }
 
-export function evaluatePassword(password: string): PasswordChecks {
-  const hasLength = password.length >= 8;
-  const hasUpper = /[A-Z]/.test(password);
-  const hasLower = /[a-z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password);
+export function evaluatePassword(password?: string): PasswordChecks {
+  const safePassword = typeof password === "string" ? password : "";
+  const hasLength = safePassword.length >= 8;
+  const hasUpper = /[A-Z]/.test(safePassword);
+  const hasLower = /[a-z]/.test(safePassword);
+  const hasNumber = /[0-9]/.test(safePassword);
+  const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(safePassword);
 
   const passedCount = [
     hasLength,
@@ -42,26 +44,28 @@ export function evaluatePassword(password: string): PasswordChecks {
 }
 
 export const PasswordStrengthIndicator: React.FC<PasswordStrengthIndicatorProps> = ({
-  password,
+  password = "",
+  evaluation,
 }) => {
-  const checks = evaluatePassword(password);
+  const checks = evaluation || evaluatePassword(password);
+  const hasValue = Boolean(password) || (evaluation ? evaluation.score > 0 : false);
 
   const getStrengthLabel = () => {
-    if (!password) return "";
+    if (!hasValue) return "";
     if (checks.score <= 2) return "Weak";
     if (checks.score <= 4) return "Fair";
     return "Strong";
   };
 
   const getStrengthColor = () => {
-    if (!password) return "bg-[#E5E3DE]";
+    if (!hasValue) return "bg-[#E5E3DE]";
     if (checks.score <= 2) return "bg-[#FF5A36]";
     if (checks.score <= 4) return "bg-amber-500";
     return "bg-emerald-600";
   };
 
   const getStrengthTextColor = () => {
-    if (!password) return "text-[#737373]";
+    if (!hasValue) return "text-[#737373]";
     if (checks.score <= 2) return "text-[#FF5A36]";
     if (checks.score <= 4) return "text-amber-600";
     return "text-emerald-700";
@@ -78,7 +82,7 @@ export const PasswordStrengthIndicator: React.FC<PasswordStrengthIndicatorProps>
   return (
     <div className="mt-2 space-y-2 pt-1" aria-live="polite">
       {/* Strength Bar */}
-      {password && (
+      {hasValue && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
             <span className="text-[#737373] font-medium">Password Strength</span>

@@ -6,8 +6,20 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
-import { db, initMongo, sanitizeUser, UserDocument, RoadmapDocument, SessionModel } from "./server/db.js";
-import { sendOtpEmail, sendRegistrationOtpEmail } from "./server/email.js";
+import {
+  db,
+  initMongo,
+  sanitizeUser,
+  sanitizeCollege,
+  sanitizeStudentForCollege,
+  UserDocument,
+  RoadmapDocument,
+  SessionModel,
+  CollegeDocument,
+  CollegeInvitationDocument,
+  CollegeMembershipDocument,
+  GranularConsent,
+} from "./server/db.js";
 import {
   analyzeJobMatch,
   quickJobMatch,
@@ -59,69 +71,26 @@ app.get("/api/health", (req: Request, res: Response) => {
   });
 });
 
-// Auth helper
+// Auth helper - strictly verifies session token from HTTP-only cookie or Authorization header
 async function getAuthenticatedUser(req: Request): Promise<UserDocument | null> {
   const token =
     req.cookies?.placement_session_token ||
     req.headers.authorization?.replace(/^Bearer\s+/i, "") ||
     (req.headers["x-session-token"] as string);
 
-  const userIdHeader = (req.headers["x-user-id"] as string)?.trim();
-  const userEmailHeader = (req.headers["x-user-email"] as string)?.trim();
-
-  // 1. Session token lookup
-  if (token) {
-    const session = await db.sessions.get(token);
-    if (session) {
-      const user = await db.users.findById(session.userId);
-      if (user) return user;
-    }
-
-    // Direct match if token is a user ID
-    const directUser = await db.users.findById(token);
-    if (directUser) {
-      await db.sessions
-        .create(token, directUser.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())
-        .catch(() => {});
-      return directUser;
-    }
+  if (!token || typeof token !== "string") {
+    return null;
   }
 
-  // 2. Check x-user-id header
-  if (userIdHeader) {
-    const user = await db.users.findById(userIdHeader);
+  // 1. Session token lookup in database
+  const session = await db.sessions.get(token);
+  if (session && session.userId) {
+    const user = await db.users.findById(session.userId);
     if (user) {
-      if (token) {
-        await db.sessions
-          .create(token, user.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())
-          .catch(() => {});
-      }
+      if (!user.role) user.role = "student";
+      if (!user.verificationStatus) user.verificationStatus = "verified";
       return user;
     }
-  }
-
-  // 3. Check x-user-email header
-  if (userEmailHeader) {
-    const user = await db.users.findByEmail(userEmailHeader);
-    if (user) {
-      if (token) {
-        await db.sessions
-          .create(token, user.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())
-          .catch(() => {});
-      }
-      return user;
-    }
-  }
-
-  // 4. Fallback if single active user in dev/preview environment
-  const allUsers = await db.users.all();
-  if (allUsers.length === 1) {
-    return allUsers[0];
-  } else if (allUsers.length > 1 && userEmailHeader) {
-    const matched = allUsers.find(
-      (u) => u.email.toLowerCase() === userEmailHeader.toLowerCase()
-    );
-    if (matched) return matched;
   }
 
   return null;
@@ -142,11 +111,103 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+// Role-based Access Control Middleware
+function requireRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user as UserDocument | undefined;
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized. Please log in." });
+      return;
+    }
+    const userRole = user.role || "student";
+    if (!roles.includes(userRole)) {
+      res.status(403).json({
+        error: "Forbidden. You do not have permission to access this resource.",
+        requiredRoles: roles,
+        currentRole: userRole,
+      });
+      return;
+    }
+    next();
+  };
+}
+
+// College Verification Middleware (allows admin or verified placement_officer only)
+async function requireVerifiedCollege(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as any).user as UserDocument | undefined;
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized. Please log in." });
+      return;
+    }
+    const userRole = user.role || "student";
+    if (userRole === "admin") {
+      return next();
+    }
+    if (userRole !== "placement_officer") {
+      res.status(403).json({
+        error: "Forbidden. Only college placement officers can access this resource.",
+      });
+      return;
+    }
+    let college: CollegeDocument | null = null;
+    if (user.collegeId) {
+      college = await db.colleges.findById(user.collegeId);
+    }
+    if (!college) {
+      college = await db.colleges.findByOfficerUserId(user.id);
+    }
+
+    if (!college) {
+      res.status(403).json({
+        error: "College record not found.",
+        code: "COLLEGE_NOT_FOUND",
+      });
+      return;
+    }
+
+    if (user.verificationStatus === "suspended" || college.status === "suspended") {
+      res.status(403).json({
+        error: "College account is suspended.",
+        status: "suspended",
+        code: "COLLEGE_SUSPENDED",
+        reason: college.suspensionReason || "Account suspended by platform administrator.",
+      });
+      return;
+    }
+
+    if (user.verificationStatus === "rejected" || college.status === "rejected") {
+      res.status(403).json({
+        error: "College registration request was rejected.",
+        status: "rejected",
+        code: "COLLEGE_REJECTED",
+        reason: college.rejectionReason || "Registration rejected by platform administrator.",
+      });
+      return;
+    }
+
+    if (user.verificationStatus !== "verified" || college.status !== "verified") {
+      res.status(403).json({
+        error: "College verification pending. Your college account is under review by the platform administrator.",
+        status: "pending",
+        code: "COLLEGE_VERIFICATION_PENDING",
+      });
+      return;
+    }
+
+    (req as any).college = college;
+    next();
+  } catch (err: any) {
+    next(err);
+  }
+}
+
 // In-memory rate limiting map for sensitive endpoints
 const passwordChangeRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 const deleteAccountRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 const registerRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 const loginRateLimit = new Map<string, { count: number; firstAttempt: number }>();
+const validateInvitationRateLimit = new Map<string, { count: number; firstAttempt: number }>();
 
 function checkRateLimit(
   map: Map<string, { count: number; firstAttempt: number }>,
@@ -265,9 +326,11 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
 
     const gradYear = Number(graduationYear) || (new Date().getFullYear() + ((course === "Diploma" || course === "BCA" ? 3 : 4) - Math.ceil(Number(semester || 1) / 2)));
 
-    if (!email || !password || !fullName || !college || !course || !branch || !semester || cgpa === undefined || !gradYear) {
+    const cleanCollege = (college && typeof college === "string" && college.trim()) ? college.trim() : "Independent Learner";
+
+    if (!email || !password || !fullName || !course || !branch || !semester || cgpa === undefined || !gradYear) {
       res.status(400).json({
-        error: "Missing required registration fields: email, password, fullName, college, course, branch, semester, and cgpa are mandatory.",
+        error: "Missing required registration fields: email, password, fullName, course, branch, semester, and cgpa are mandatory.",
       });
       return;
     }
@@ -327,9 +390,11 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       email: email.toLowerCase().trim(),
       passwordHash,
       fullName: fullName.trim(),
+      role: "student",
+      verificationStatus: "verified",
       phone: phone?.trim() || "",
       rollNumber: rollNumber?.trim() || "",
-      college: college.trim(),
+      college: cleanCollege,
       course: course.trim(),
       branch: branch.trim(),
       semester: Number(semester),
@@ -385,7 +450,1394 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
   }
 });
 
-// 2. Student Login
+// 2b. College Placement Officer Registration (Pending Verification by Default)
+app.post("/api/college/register", async (req: Request, res: Response) => {
+  try {
+    const clientIp =
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+      req.socket.remoteAddress ||
+      "client";
+
+    if (!checkRateLimit(registerRateLimit, clientIp, 30, 15 * 60 * 1000)) {
+      res.status(429).json({ error: "Too many college registration attempts. Please try again after 15 minutes." });
+      return;
+    }
+
+    const {
+      collegeName,
+      code,
+      domain,
+      website,
+      city,
+      state,
+      country,
+      officerName,
+      officerEmail,
+      officerPhone,
+      officerDesignation,
+      password,
+    } = req.body || {};
+
+    if (!collegeName || !city || !state || !officerName || !officerEmail || !officerPhone || !officerDesignation || !password) {
+      res.status(400).json({
+        error: "Missing required fields: Institution Name, City, State, Officer Name, Email, Phone, Designation, and Password are mandatory.",
+      });
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(officerEmail)) {
+      res.status(400).json({ error: "Please provide a valid official email address." });
+      return;
+    }
+
+    // Password strength
+    const hasMinLen = password.length >= 8;
+    const hasUpper = /[A-Z]/.test(password);
+    const hasLower = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password);
+
+    if (!hasMinLen || !hasUpper || !hasLower || !hasNumber || !hasSpecial) {
+      res.status(400).json({
+        error: "Password must be at least 8 characters and include uppercase, lowercase, number, and a special symbol.",
+      });
+      return;
+    }
+
+    const cleanEmail = officerEmail.toLowerCase().trim();
+
+    // Ensure email is unique across users
+    const existingUser = await db.users.findByEmail(cleanEmail);
+    if (existingUser) {
+      res.status(409).json({
+        error: "An account with this email address already exists. Please log in or use your institutional email address.",
+      });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const officerUserId = `officer-${crypto.randomBytes(8).toString("hex")}`;
+    const collegeId = `college-${crypto.randomBytes(8).toString("hex")}`;
+    const inviteCode = crypto.randomBytes(4).toString("hex").toUpperCase();
+
+    // 1. Create College record with status: "pending"
+    const newCollege: CollegeDocument = {
+      id: collegeId,
+      name: collegeName.trim(),
+      code: code?.trim().toUpperCase() || "",
+      domain: domain?.trim().toLowerCase() || "",
+      website: website?.trim() || "",
+      city: city.trim(),
+      state: state.trim(),
+      country: country?.trim() || "India",
+      officerName: officerName.trim(),
+      officerEmail: cleanEmail,
+      officerPhone: officerPhone.trim(),
+      officerDesignation: officerDesignation.trim(),
+      officerUserId,
+      status: "pending",
+      inviteCode,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const createdCollege = await db.colleges.create(newCollege);
+
+    // 2. Create Officer user with role: "placement_officer" and verificationStatus: "pending"
+    const newOfficer: UserDocument = {
+      id: officerUserId,
+      email: cleanEmail,
+      passwordHash,
+      fullName: officerName.trim(),
+      role: "placement_officer",
+      verificationStatus: "pending",
+      collegeId,
+      college: collegeName.trim(),
+      designation: officerDesignation.trim(),
+      phone: officerPhone.trim(),
+      onboardingCompleted: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const createdOfficer = await db.users.create(newOfficer);
+
+    // 3. Create persistent session
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    await db.sessions.create(sessionToken, createdOfficer.id, expiresAt);
+
+    // Set secure HTTP-only cookie
+    res.cookie("placement_session_token", sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    const safeOfficer = sanitizeUser(createdOfficer);
+
+    res.status(201).json({
+      success: true,
+      message: "College placement cell application submitted successfully. Your registration is currently under review by Placement OS administration.",
+      user: safeOfficer,
+      college: createdCollege,
+      token: sessionToken,
+    });
+  } catch (err: any) {
+    console.error("College registration error:", err);
+    res.status(500).json({ error: "College registration failed: " + err.message });
+  }
+});
+
+// 2c. College Verification Status Endpoint (for placement officers checking verification)
+app.get(["/api/college/status", "/api/college/verification-status"], requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as UserDocument;
+    if (user.role !== "placement_officer" && user.role !== "admin") {
+      res.status(403).json({ error: "Access restricted to college placement officers and administrators." });
+      return;
+    }
+
+    let college: CollegeDocument | null = null;
+    if (user.collegeId) {
+      college = await db.colleges.findById(user.collegeId);
+    }
+    if (!college) {
+      college = await db.colleges.findByOfficerUserId(user.id);
+    }
+
+    const isAdmin = user.role === "admin";
+    const safeCollege = college ? sanitizeCollege(college, isAdmin) : null;
+
+    res.json({
+      success: true,
+      role: user.role,
+      verificationStatus: user.verificationStatus || "pending",
+      college: safeCollege,
+    });
+  } catch (err: any) {
+    console.error("College status error:", err);
+    res.status(500).json({ error: "Failed to check college status: " + err.message });
+  }
+});
+
+// ----------------------------------------------------
+// ADMINISTRATIVE COLLEGE VERIFICATION ENDPOINTS
+// ----------------------------------------------------
+
+// 1. List Colleges with status filter and search query
+app.get("/api/admin/colleges", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const { status, search } = req.query;
+    const query: any = {};
+
+    if (status && typeof status === "string" && status !== "all") {
+      const allowedStatuses = ["pending", "verified", "rejected", "suspended"];
+      if (allowedStatuses.includes(status)) {
+        query.status = status;
+      }
+    }
+
+    if (search && typeof search === "string" && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(escaped, "i");
+      query.$or = [
+        { name: regex },
+        { code: regex },
+        { officerEmail: regex },
+        { officerName: regex },
+        { city: regex },
+        { state: regex },
+      ];
+    }
+
+    const colleges = await db.colleges.find(query);
+    const sanitized = colleges.map((c) => sanitizeCollege(c, true));
+
+    // Calculate status counts for admin summary tabs
+    const allColleges = await db.colleges.all();
+    const counts = {
+      all: allColleges.length,
+      pending: allColleges.filter((c) => c.status === "pending").length,
+      verified: allColleges.filter((c) => c.status === "verified").length,
+      rejected: allColleges.filter((c) => c.status === "rejected").length,
+      suspended: allColleges.filter((c) => c.status === "suspended").length,
+    };
+
+    res.json({
+      success: true,
+      colleges: sanitized,
+      counts,
+    });
+  } catch (err: any) {
+    console.error("Admin list colleges error:", err);
+    res.status(500).json({ error: "Failed to list colleges: " + err.message });
+  }
+});
+
+// 2. Get Single College Details
+app.get("/api/admin/colleges/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const college = await db.colleges.findById(id);
+
+    if (!college) {
+      res.status(404).json({ error: "College record not found." });
+      return;
+    }
+
+    // Also fetch associated officer details
+    const officer = await db.users.findById(college.officerUserId);
+
+    res.json({
+      success: true,
+      college: sanitizeCollege(college, true),
+      officer: officer ? sanitizeUser(officer) : null,
+    });
+  } catch (err: any) {
+    console.error("Admin get college error:", err);
+    res.status(500).json({ error: "Failed to retrieve college: " + err.message });
+  }
+});
+
+// 3. Verify College
+app.patch("/api/admin/colleges/:id/verify", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { id } = req.params;
+    const { verificationMethod, reviewNotes } = req.body || {};
+
+    if (!verificationMethod || typeof verificationMethod !== "string" || !verificationMethod.trim()) {
+      res.status(400).json({
+        error: "Verification method is required (e.g. 'Institutional Email Domain Confirmed', 'Registrar Direct Phone Verification', 'MOU Documentation').",
+      });
+      return;
+    }
+
+    const college = await db.colleges.findById(id);
+    if (!college) {
+      res.status(404).json({ error: "College not found." });
+      return;
+    }
+
+    if (college.status === "verified") {
+      res.status(400).json({ error: "College is already verified." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updated = await db.colleges.update(id, {
+      status: "verified",
+      verificationMethod: verificationMethod.trim(),
+      verifiedAt: now,
+      verifiedBy: adminUser.id,
+      reviewedAt: now,
+      reviewedBy: adminUser.id,
+      reviewedByName: adminUser.fullName,
+      reviewNotes: typeof reviewNotes === "string" ? reviewNotes.trim() : college.reviewNotes,
+      rejectionReason: undefined,
+      suspensionReason: undefined,
+    });
+
+    // Update associated placement officer account
+    if (college.officerUserId) {
+      await db.users.update(college.officerUserId, {
+        verificationStatus: "verified",
+      });
+    }
+
+    console.log(`[Admin Audit] College '${college.name}' (${college.id}) VERIFIED by admin ${adminUser.email} using method: '${verificationMethod}'.`);
+
+    res.json({
+      success: true,
+      message: `College '${college.name}' has been successfully verified.`,
+      college: sanitizeCollege(updated, true),
+    });
+  } catch (err: any) {
+    console.error("Admin verify college error:", err);
+    res.status(500).json({ error: "Failed to verify college: " + err.message });
+  }
+});
+
+// 4. Reject College
+app.patch("/api/admin/colleges/:id/reject", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { id } = req.params;
+    const { rejectionReason, reviewNotes } = req.body || {};
+
+    if (!rejectionReason || typeof rejectionReason !== "string" || !rejectionReason.trim()) {
+      res.status(400).json({
+        error: "A clear rejection reason is mandatory to explain why the college request was not approved.",
+      });
+      return;
+    }
+
+    const college = await db.colleges.findById(id);
+    if (!college) {
+      res.status(404).json({ error: "College not found." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updated = await db.colleges.update(id, {
+      status: "rejected",
+      rejectionReason: rejectionReason.trim(),
+      reviewedAt: now,
+      reviewedBy: adminUser.id,
+      reviewedByName: adminUser.fullName,
+      reviewNotes: typeof reviewNotes === "string" ? reviewNotes.trim() : college.reviewNotes,
+    });
+
+    // Update associated placement officer account
+    if (college.officerUserId) {
+      await db.users.update(college.officerUserId, {
+        verificationStatus: "rejected",
+      });
+    }
+
+    console.log(`[Admin Audit] College '${college.name}' (${college.id}) REJECTED by admin ${adminUser.email}. Reason: '${rejectionReason}'.`);
+
+    res.json({
+      success: true,
+      message: `College registration for '${college.name}' has been rejected.`,
+      college: sanitizeCollege(updated, true),
+    });
+  } catch (err: any) {
+    console.error("Admin reject college error:", err);
+    res.status(500).json({ error: "Failed to reject college: " + err.message });
+  }
+});
+
+// 5. Suspend College
+app.patch("/api/admin/colleges/:id/suspend", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { id } = req.params;
+    const { suspensionReason, reviewNotes } = req.body || {};
+
+    if (!suspensionReason || typeof suspensionReason !== "string" || !suspensionReason.trim()) {
+      res.status(400).json({
+        error: "A justification for suspension is mandatory.",
+      });
+      return;
+    }
+
+    const college = await db.colleges.findById(id);
+    if (!college) {
+      res.status(404).json({ error: "College not found." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updated = await db.colleges.update(id, {
+      status: "suspended",
+      suspensionReason: suspensionReason.trim(),
+      reviewedAt: now,
+      reviewedBy: adminUser.id,
+      reviewedByName: adminUser.fullName,
+      reviewNotes: typeof reviewNotes === "string" ? reviewNotes.trim() : college.reviewNotes,
+    });
+
+    // Update associated placement officer account
+    if (college.officerUserId) {
+      await db.users.update(college.officerUserId, {
+        verificationStatus: "suspended",
+      });
+    }
+
+    console.log(`[Admin Audit] College '${college.name}' (${college.id}) SUSPENDED by admin ${adminUser.email}. Reason: '${suspensionReason}'.`);
+
+    res.json({
+      success: true,
+      message: `Portal access for '${college.name}' has been suspended.`,
+      college: sanitizeCollege(updated, true),
+    });
+  } catch (err: any) {
+    console.error("Admin suspend college error:", err);
+    res.status(500).json({ error: "Failed to suspend college: " + err.message });
+  }
+});
+
+// ====================================================
+// PHASE 4 — SECURE STUDENT-COLLEGE LINKING SYSTEM
+// ====================================================
+
+// 4a. Officer: Generate New College Invitation Code
+app.post("/api/college/invitations", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { label, maxUses, validityDays } = req.body || {};
+
+    const cleanLabel = typeof label === "string" ? label.trim().slice(0, 80) : "";
+    const parsedMaxUses = Number.isInteger(maxUses) && maxUses > 0 ? Math.min(maxUses, 2000) : 100;
+    const days = Number.isInteger(validityDays) && validityDays > 0 ? Math.min(validityDays, 365) : 30;
+
+    // Generate unique code with high entropy: 8 alphanumeric characters
+    let code = "";
+    let attempts = 0;
+    while (!code && attempts < 10) {
+      attempts++;
+      const candidate = crypto.randomBytes(4).toString("hex").toUpperCase();
+      const existing = await db.invitations.findByCode(candidate);
+      if (!existing) {
+        code = candidate;
+      }
+    }
+
+    if (!code) {
+      res.status(500).json({ error: "Failed to generate unique invitation code. Please try again." });
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const newInvitation: CollegeInvitationDocument = {
+      id: `inv-${crypto.randomBytes(8).toString("hex")}`,
+      collegeId: college.id,
+      createdBy: officer.id,
+      code,
+      label: cleanLabel,
+      maxUses: parsedMaxUses,
+      usedCount: 0,
+      expiresAt,
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const created = await db.invitations.create(newInvitation);
+
+    console.log(`[Phase 4] College invitation generated: Code ${code} for college '${college.name}' (${college.id}) by officer ${officer.email}`);
+
+    res.status(201).json({
+      success: true,
+      message: "Invitation code generated successfully.",
+      invitation: created,
+    });
+  } catch (err: any) {
+    console.error("Create invitation error:", err);
+    res.status(500).json({ error: "Failed to create invitation: " + err.message });
+  }
+});
+
+// 4b. Officer: List College Invitations
+app.get("/api/college/invitations", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const invitations = await db.invitations.findByCollege(college.id);
+
+    // Auto-update expired invitations
+    const now = new Date();
+    for (const inv of invitations) {
+      if (inv.status === "active" && new Date(inv.expiresAt) < now) {
+        inv.status = "expired";
+        await db.invitations.update(inv.id, { status: "expired" });
+      }
+    }
+
+    res.json({
+      success: true,
+      invitations,
+    });
+  } catch (err: any) {
+    console.error("List invitations error:", err);
+    res.status(500).json({ error: "Failed to list invitations: " + err.message });
+  }
+});
+
+// 4c. Officer: Revoke College Invitation Code
+app.delete("/api/college/invitations/:id", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+
+    const invitation = await db.invitations.findById(id);
+    if (!invitation || invitation.collegeId !== college.id) {
+      res.status(404).json({ error: "Invitation code not found for this college." });
+      return;
+    }
+
+    const updated = await db.invitations.revoke(id);
+
+    res.json({
+      success: true,
+      message: `Invitation code '${invitation.code}' has been revoked.`,
+      invitation: updated,
+    });
+  } catch (err: any) {
+    console.error("Revoke invitation error:", err);
+    res.status(500).json({ error: "Failed to revoke invitation: " + err.message });
+  }
+});
+
+// 4d. Public / Student: Validate Invitation Code (Rate-limited, Public-safe)
+app.get("/api/invitations/validate/:code", async (req: Request, res: Response) => {
+  try {
+    const clientIp =
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+      req.socket.remoteAddress ||
+      "client";
+
+    if (!checkRateLimit(validateInvitationRateLimit, clientIp, 25, 10 * 60 * 1000)) {
+      res.status(429).json({ error: "Too many code validation attempts. Please try again after 10 minutes." });
+      return;
+    }
+
+    const rawCode = req.params.code?.trim().toUpperCase();
+    if (!rawCode) {
+      res.status(400).json({ error: "Invitation code is required.", valid: false });
+      return;
+    }
+
+    const invitation = await db.invitations.findByCode(rawCode);
+    if (!invitation) {
+      res.status(404).json({ error: "Invalid invitation code. Please verify with your college placement cell.", valid: false });
+      return;
+    }
+
+    if (invitation.status === "revoked") {
+      res.status(400).json({ error: "This invitation code has been revoked by the placement cell.", valid: false });
+      return;
+    }
+
+    if (new Date(invitation.expiresAt) < new Date() || invitation.status === "expired") {
+      res.status(400).json({ error: "This invitation code has expired. Please request a new code from your placement cell.", valid: false });
+      return;
+    }
+
+    if (invitation.usedCount >= invitation.maxUses) {
+      res.status(400).json({ error: "This invitation code has reached its maximum enrollment capacity.", valid: false });
+      return;
+    }
+
+    // Verify issuing college
+    const college = await db.colleges.findById(invitation.collegeId);
+    if (!college) {
+      res.status(404).json({ error: "Issuing college record not found.", valid: false });
+      return;
+    }
+
+    if (college.status !== "verified") {
+      res.status(403).json({
+        error: "The college that issued this code is not yet verified by platform administration.",
+        valid: false,
+      });
+      return;
+    }
+
+    // Return public safe details without internal notes or officer personal contact
+    res.json({
+      success: true,
+      valid: true,
+      invitation: {
+        id: invitation.id,
+        code: invitation.code,
+        label: invitation.label || "College Student Cohort",
+        expiresAt: invitation.expiresAt,
+      },
+      college: {
+        id: college.id,
+        name: college.name,
+        code: college.code,
+        city: college.city,
+        state: college.state,
+        country: college.country || "India",
+        domain: college.domain,
+        website: college.website,
+        officerDesignation: college.officerDesignation,
+      },
+    });
+  } catch (err: any) {
+    console.error("Validate invitation error:", err);
+    res.status(500).json({ error: "Failed to validate invitation: " + err.message });
+  }
+});
+
+// 4e. Student: Link Account with College via Invitation Code + Granular Consent
+app.post("/api/student/link-college", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as UserDocument;
+    if (user.role && user.role !== "student") {
+      res.status(403).json({ error: "Only student accounts can link to a college placement cell." });
+      return;
+    }
+
+    const { code, consent } = req.body || {};
+    const rawCode = typeof code === "string" ? code.trim().toUpperCase() : "";
+
+    if (!rawCode) {
+      res.status(400).json({ error: "Invitation code is required." });
+      return;
+    }
+
+    // 1. Verify invitation
+    const invitation = await db.invitations.findByCode(rawCode);
+    if (!invitation) {
+      res.status(404).json({ error: "Invalid invitation code." });
+      return;
+    }
+
+    if (invitation.status === "revoked") {
+      res.status(400).json({ error: "This invitation code has been revoked." });
+      return;
+    }
+
+    if (new Date(invitation.expiresAt) < new Date() || invitation.status === "expired") {
+      res.status(400).json({ error: "This invitation code has expired." });
+      return;
+    }
+
+    if (invitation.usedCount >= invitation.maxUses) {
+      res.status(400).json({ error: "This invitation code has reached maximum usage capacity." });
+      return;
+    }
+
+    // 2. Verify College status
+    const college = await db.colleges.findById(invitation.collegeId);
+    if (!college || college.status !== "verified") {
+      res.status(403).json({ error: "College is not verified." });
+      return;
+    }
+
+    // 3. Check for existing active or pending membership
+    const existingActive = await db.memberships.findActiveOrPendingByStudent(user.id);
+    if (existingActive) {
+      if (existingActive.collegeId === college.id) {
+        res.status(409).json({
+          error: "You already have an active or pending affiliation with this college.",
+          membership: existingActive,
+        });
+        return;
+      }
+      res.status(409).json({
+        error: "You are currently affiliated with another college. Please disconnect from your current college first before connecting to a new one.",
+        membership: existingActive,
+      });
+      return;
+    }
+
+    // 4. Parse granular consent preferences (defaults to true if omitted, but explicitly stored)
+    const granularConsent: GranularConsent = {
+      shareAcademic: typeof consent?.shareAcademic === "boolean" ? consent.shareAcademic : true,
+      shareSkillRoadmap: typeof consent?.shareSkillRoadmap === "boolean" ? consent.shareSkillRoadmap : true,
+      shareInterviewScores: typeof consent?.shareInterviewScores === "boolean" ? consent.shareInterviewScores : true,
+      consentGivenAt: new Date().toISOString(),
+      consentVersion: "1.0",
+    };
+
+    // 5. Increment invitation usage atomically
+    await db.invitations.incrementUsed(invitation.id);
+
+    // 6. Create College Membership with status: "pending"
+    const newMembership: CollegeMembershipDocument = {
+      id: `mem-${crypto.randomBytes(8).toString("hex")}`,
+      studentId: user.id,
+      collegeId: college.id,
+      invitationId: invitation.id,
+      invitationCode: invitation.code,
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      consent: granularConsent,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const createdMembership = await db.memberships.create(newMembership);
+
+    // Update user's college name reference
+    await db.users.update(user.id, {
+      college: college.name,
+      collegeId: college.id,
+    });
+
+    console.log(`[Phase 4] Student ${user.email} (${user.id}) linked to college '${college.name}' (${college.id}) via code ${invitation.code}`);
+
+    res.status(201).json({
+      success: true,
+      message: `Affiliation request submitted to ${college.name}. Awaiting review by the college placement cell.`,
+      membership: createdMembership,
+      college: sanitizeCollege(college, false),
+    });
+  } catch (err: any) {
+    console.error("Link college error:", err);
+    res.status(500).json({ error: "Failed to link with college: " + err.message });
+  }
+});
+
+// 4f. Student: Get Current College Membership & Consent
+app.get("/api/student/college-membership", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as UserDocument;
+    const membership = await db.memberships.findActiveOrPendingByStudent(user.id);
+
+    if (!membership) {
+      res.json({
+        success: true,
+        membership: null,
+      });
+      return;
+    }
+
+    const college = await db.colleges.findById(membership.collegeId);
+    const safeCollege = college ? sanitizeCollege(college, false) : null;
+
+    res.json({
+      success: true,
+      membership: {
+        ...membership,
+        college: safeCollege,
+      },
+    });
+  } catch (err: any) {
+    console.error("Get student college membership error:", err);
+    res.status(500).json({ error: "Failed to retrieve college membership: " + err.message });
+  }
+});
+
+// 4g. Student: Update Granular Consent Preferences
+app.patch("/api/student/college-consent", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as UserDocument;
+    const membership = await db.memberships.findActiveOrPendingByStudent(user.id);
+
+    if (!membership) {
+      res.status(404).json({ error: "No active or pending college affiliation found." });
+      return;
+    }
+
+    const { shareAcademic, shareSkillRoadmap, shareInterviewScores } = req.body || {};
+
+    const currentConsent = membership.consent || {
+      shareAcademic: true,
+      shareSkillRoadmap: true,
+      shareInterviewScores: true,
+      consentGivenAt: membership.requestedAt,
+      consentVersion: "1.0",
+    };
+
+    const newConsent: GranularConsent = {
+      shareAcademic: typeof shareAcademic === "boolean" ? shareAcademic : currentConsent.shareAcademic,
+      shareSkillRoadmap: typeof shareSkillRoadmap === "boolean" ? shareSkillRoadmap : currentConsent.shareSkillRoadmap,
+      shareInterviewScores: typeof shareInterviewScores === "boolean" ? shareInterviewScores : currentConsent.shareInterviewScores,
+      consentGivenAt: new Date().toISOString(),
+      consentVersion: "1.0",
+    };
+
+    const updated = await db.memberships.updateConsent(membership.id, newConsent);
+
+    console.log(`[Phase 4 Audit] Student ${user.email} updated data sharing consent for college ${membership.collegeId}:`, newConsent);
+
+    res.json({
+      success: true,
+      message: "Data-sharing consent preferences updated successfully.",
+      consent: newConsent,
+      membership: updated,
+    });
+  } catch (err: any) {
+    console.error("Update consent error:", err);
+    res.status(500).json({ error: "Failed to update consent preferences: " + err.message });
+  }
+});
+
+// 4h. Student: Disconnect from College Placement Cell
+app.delete("/api/student/college-membership", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as UserDocument;
+    const membership = await db.memberships.findActiveOrPendingByStudent(user.id);
+
+    if (!membership) {
+      res.status(404).json({ error: "No active or pending college affiliation found." });
+      return;
+    }
+
+    await db.memberships.update(membership.id, {
+      status: "revoked",
+      rejectionReason: "Student voluntarily dissociated account.",
+    });
+
+    await db.users.update(user.id, {
+      college: "Independent Learner",
+      collegeId: undefined,
+    });
+
+    console.log(`[Phase 4 Audit] Student ${user.email} voluntarily dissociated from college ${membership.collegeId}. Data access revoked.`);
+
+    res.json({
+      success: true,
+      message: "Successfully disconnected from college placement cell. Your data is no longer accessible by the college.",
+    });
+  } catch (err: any) {
+    console.error("Disconnect college error:", err);
+    res.status(500).json({ error: "Failed to disconnect from college: " + err.message });
+  }
+});
+
+// 4i. Officer: Get Linked Students Cohort (With Strict Granular Consent Filtering)
+app.get("/api/college/memberships", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const { status, search } = req.query;
+
+    const allMemberships = await db.memberships.findByCollege(college.id);
+    const counts = {
+      all: allMemberships.length,
+      pending: allMemberships.filter((m) => m.status === "pending").length,
+      active: allMemberships.filter((m) => m.status === "active").length,
+      rejected: allMemberships.filter((m) => m.status === "rejected").length,
+    };
+
+    let filtered = allMemberships;
+    if (status && typeof status === "string" && status !== "all") {
+      filtered = filtered.filter((m) => m.status === status);
+    }
+
+    // Resolve student records and apply privacy filters
+    const sanitizedStudents = [];
+    for (const mem of filtered) {
+      const student = await db.users.findById(mem.studentId);
+      if (!student) continue;
+
+      let score = null;
+      let roadmap = null;
+      let interview = null;
+
+      if (mem.consent?.shareInterviewScores) {
+        score = await db.readinessScores.findByUser(student.id);
+        const interviews = await db.interviews.findByUser(student.id);
+        interview = interviews.length > 0 ? interviews[0] : null;
+      }
+
+      if (mem.consent?.shareSkillRoadmap) {
+        const roadmaps = await db.roadmaps.findByUser(student.id);
+        roadmap = roadmaps.length > 0 ? roadmaps[0] : null;
+      }
+
+      const sanitized = sanitizeStudentForCollege(student, mem, score, roadmap, interview);
+      if (!sanitized) continue;
+
+      // Filter by search query if provided
+      if (search && typeof search === "string" && search.trim()) {
+        const q = search.trim().toLowerCase();
+        const matchesName = sanitized.fullName.toLowerCase().includes(q);
+        const matchesEmail = sanitized.email.toLowerCase().includes(q);
+        const matchesRoll = sanitized.rollNumber ? sanitized.rollNumber.toLowerCase().includes(q) : false;
+        const matchesBranch = sanitized.branch ? sanitized.branch.toLowerCase().includes(q) : false;
+        if (!matchesName && !matchesEmail && !matchesRoll && !matchesBranch) {
+          continue;
+        }
+      }
+
+      sanitizedStudents.push(sanitized);
+    }
+
+    res.json({
+      success: true,
+      students: sanitizedStudents,
+      counts,
+    });
+  } catch (err: any) {
+    console.error("List college memberships error:", err);
+    res.status(500).json({ error: "Failed to list student roster: " + err.message });
+  }
+});
+
+// 4j. Officer: Approve Student Affiliation Request
+app.patch("/api/college/memberships/:id/approve", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+
+    const membership = await db.memberships.findById(id);
+    if (!membership || membership.collegeId !== college.id) {
+      res.status(404).json({ error: "Student membership request not found." });
+      return;
+    }
+
+    const updated = await db.memberships.update(id, {
+      status: "active",
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: officer.id,
+      rejectionReason: undefined,
+    });
+
+    console.log(`[Phase 4 Audit] Officer ${officer.email} APPROVED student membership ${id} for college ${college.name}`);
+
+    res.json({
+      success: true,
+      message: "Student affiliation request approved successfully.",
+      membership: updated,
+    });
+  } catch (err: any) {
+    console.error("Approve membership error:", err);
+    res.status(500).json({ error: "Failed to approve membership: " + err.message });
+  }
+});
+
+// 4k. Officer: Reject Student Affiliation Request
+app.patch("/api/college/memberships/:id/reject", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    const membership = await db.memberships.findById(id);
+    if (!membership || membership.collegeId !== college.id) {
+      res.status(404).json({ error: "Student membership request not found." });
+      return;
+    }
+
+    const updated = await db.memberships.update(id, {
+      status: "rejected",
+      rejectionReason: typeof reason === "string" && reason.trim() ? reason.trim() : "Declined by placement cell",
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: officer.id,
+    });
+
+    console.log(`[Phase 4 Audit] Officer ${officer.email} REJECTED student membership ${id} for college ${college.name}. Reason: ${reason}`);
+
+    res.json({
+      success: true,
+      message: "Student affiliation request rejected.",
+      membership: updated,
+    });
+  } catch (err: any) {
+    console.error("Reject membership error:", err);
+    res.status(500).json({ error: "Failed to reject membership: " + err.message });
+  }
+});
+
+// 4l. Officer: Remove Student from College Cohort
+app.delete("/api/college/memberships/:id", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+
+    const membership = await db.memberships.findById(id);
+    if (!membership || membership.collegeId !== college.id) {
+      res.status(404).json({ error: "Student membership record not found." });
+      return;
+    }
+
+    await db.memberships.update(id, {
+      status: "removed",
+      rejectionReason: "Removed from cohort by placement cell officer.",
+    });
+
+    console.log(`[Phase 4 Audit] Officer ${officer.email} REMOVED student membership ${id} from college ${college.name}`);
+
+    res.json({
+      success: true,
+      message: "Student removed from college cohort.",
+    });
+  } catch (err: any) {
+    console.error("Remove student membership error:", err);
+    res.status(500).json({ error: "Failed to remove student from cohort: " + err.message });
+  }
+});
+
+// ====================================================
+// PHASE 5 — COLLEGE PLACEMENT ANALYTICS & REPORTS
+// ====================================================
+
+// Helper for formula injection protection in CSV exports
+function sanitizeCsvCell(val: any): string {
+  if (val === null || val === undefined) return "";
+  const str = String(val);
+  const dangerousChars = ["=", "+", "-", "@", "\t", "\r"];
+  if (dangerousChars.some((char) => str.startsWith(char))) {
+    return `'${str}`;
+  }
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// 5a. Officer: Get College Analytics & Summary Dashboard
+app.get("/api/college/analytics", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const allMemberships = await db.memberships.findByCollege(college.id);
+
+    const totalLinkedStudents = allMemberships.length;
+    const activeMemberships = allMemberships.filter((m) => m.status === "active");
+    const activeLinkedStudents = activeMemberships.length;
+
+    let studentsWithConsent = 0;
+    let studentsWithReadinessData = 0;
+    let totalReadinessScore = 0;
+    let totalRoadmapProgress = 0;
+    let roadmapCount = 0;
+
+    const skillGapCounts = new Map<string, number>();
+
+    for (const mem of activeMemberships) {
+      if (mem.consent) studentsWithConsent++;
+
+      const student = await db.users.findById(mem.studentId);
+      if (!student) continue;
+
+      let studentReadiness = null;
+      let studentRoadmap = null;
+
+      if (mem.consent?.shareInterviewScores) {
+        const scoreDoc = await db.readinessScores.findByUser(student.id);
+        if (scoreDoc && typeof scoreDoc.overallScore === "number") {
+          studentReadiness = scoreDoc.overallScore;
+        }
+      }
+
+      if (mem.consent?.shareSkillRoadmap) {
+        const roadmaps = await db.roadmaps.findByUser(student.id);
+        if (roadmaps.length > 0) {
+          studentRoadmap = roadmaps[0];
+        }
+      }
+
+      if (studentReadiness !== null || studentRoadmap !== null) {
+        studentsWithReadinessData++;
+      }
+
+      if (studentReadiness !== null) {
+        totalReadinessScore += studentReadiness;
+      }
+
+      if (studentRoadmap) {
+        totalRoadmapProgress += (studentRoadmap.overallProgress ?? 0);
+        roadmapCount++;
+
+        const gaps = studentRoadmap.skillGap?.missing || [];
+        for (const skill of gaps) {
+          const cleanSkill = skill.trim();
+          if (cleanSkill) {
+            skillGapCounts.set(cleanSkill, (skillGapCounts.get(cleanSkill) || 0) + 1);
+          }
+        }
+      }
+    }
+
+    const avgReadiness = studentsWithReadinessData > 0 ? Math.round(totalReadinessScore / studentsWithReadinessData) : null;
+    const avgRoadmap = roadmapCount > 0 ? Math.round(totalRoadmapProgress / roadmapCount) : null;
+
+    // Minimum group size threshold for anonymized suppression (configurable, e.g. 3)
+    const MIN_GROUP_SIZE = 3;
+    const isAnonymized = activeLinkedStudents < MIN_GROUP_SIZE;
+
+    // Top missing skills sorted descending
+    const sortedSkills = Array.from(skillGapCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([skill, missingCount]) => ({
+        skill,
+        missingCount,
+        percentageOfCohort: activeLinkedStudents > 0 ? Math.round((missingCount / activeLinkedStudents) * 100) : 0,
+      }));
+
+    // Readiness Bands
+    let band90_100 = 0;
+    let band75_89 = 0;
+    let band60_74 = 0;
+    let bandUnder60 = 0;
+
+    for (const mem of activeMemberships) {
+      if (!mem.consent?.shareInterviewScores) continue;
+      const student = await db.users.findById(mem.studentId);
+      if (!student) continue;
+      const scoreDoc = await db.readinessScores.findByUser(student.id);
+      if (!scoreDoc || typeof scoreDoc.overallScore !== "number") continue;
+
+      const sc = scoreDoc.overallScore;
+      if (sc >= 90) band90_100++;
+      else if (sc >= 75) band75_89++;
+      else if (sc >= 60) band60_74++;
+      else bandUnder60++;
+    }
+
+    const readinessBands = [
+      { bandName: "90% - 100% (Elite Readiness)", minScore: 90, maxScore: 100, studentCount: band90_100, percentage: activeLinkedStudents > 0 ? Math.round((band90_100 / activeLinkedStudents) * 100) : 0 },
+      { bandName: "75% - 89% (Placement Ready)", minScore: 75, maxScore: 89, studentCount: band75_89, percentage: activeLinkedStudents > 0 ? Math.round((band75_89 / activeLinkedStudents) * 100) : 0 },
+      { bandName: "60% - 74% (Developing)", minScore: 60, maxScore: 74, studentCount: band60_74, percentage: activeLinkedStudents > 0 ? Math.round((band60_74 / activeLinkedStudents) * 100) : 0 },
+      { bandName: "Under 60% (Needs Improvement)", minScore: 0, maxScore: 59, studentCount: bandUnder60, percentage: activeLinkedStudents > 0 ? Math.round((bandUnder60 / activeLinkedStudents) * 100) : 0 },
+    ];
+
+    res.json({
+      success: true,
+      analytics: {
+        collegeId: college.id,
+        collegeName: college.name,
+        totalLinkedStudents,
+        activeLinkedStudents,
+        studentsWithConsent,
+        studentsWithReadinessData,
+        averageReadinessScore: avgReadiness,
+        averageRoadmapProgress: avgRoadmap,
+        topMissingSkills: sortedSkills,
+        readinessBands,
+        minimumGroupSizeThreshold: MIN_GROUP_SIZE,
+        anonymized: isAnonymized,
+        generatedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.error("College analytics error:", err);
+    res.status(500).json({ error: "Failed to load college analytics: " + err.message });
+  }
+});
+
+// 5b. Officer: Get Individual Student Permitted Progress Detail
+app.get("/api/college/students/:studentId/progress", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const { studentId } = req.params;
+
+    const membership = await db.memberships.findByStudentAndCollege(studentId, college.id);
+    if (!membership || membership.status !== "active") {
+      res.status(403).json({ error: "Access denied. Student is not an active linked member of your college." });
+      return;
+    }
+
+    const student = await db.users.findById(studentId);
+    if (!student) {
+      res.status(404).json({ error: "Student record not found." });
+      return;
+    }
+
+    let score = null;
+    let roadmap = null;
+    let interview = null;
+
+    if (membership.consent?.shareInterviewScores) {
+      score = await db.readinessScores.findByUser(student.id);
+      const interviews = await db.interviews.findByUser(student.id);
+      interview = interviews.length > 0 ? interviews[0] : null;
+    }
+
+    if (membership.consent?.shareSkillRoadmap) {
+      const roadmaps = await db.roadmaps.findByUser(student.id);
+      roadmap = roadmaps.length > 0 ? roadmaps[0] : null;
+    }
+
+    const sanitized = sanitizeStudentForCollege(student, membership, score, roadmap, interview);
+
+    // Also include roadmap phases if roadmap is consented
+    let roadmapDetails = null;
+    if (membership.consent?.shareSkillRoadmap && roadmap) {
+      roadmapDetails = {
+        jobTitle: roadmap.jobTitle,
+        companyName: roadmap.companyName,
+        overallProgress: roadmap.overallProgress,
+        completedTasks: roadmap.completedTasks,
+        totalTasks: roadmap.totalTasks,
+        phases: roadmap.phases,
+        skillGap: roadmap.skillGap,
+      };
+    }
+
+    res.json({
+      success: true,
+      student: sanitized,
+      roadmap: roadmapDetails,
+    });
+  } catch (err: any) {
+    console.error("Student progress detail error:", err);
+    res.status(500).json({ error: "Failed to retrieve student progress detail: " + err.message });
+  }
+});
+
+// 5c. Officer: Export CSV Report of Active Student Cohort
+app.get("/api/college/reports/csv", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const allMemberships = await db.memberships.findByCollege(college.id);
+    const activeMemberships = allMemberships.filter((m) => m.status === "active");
+
+    const rows = [
+      [
+        "Student ID",
+        "Full Name",
+        "Email",
+        "Roll Number",
+        "Course",
+        "Branch",
+        "Semester",
+        "CGPA",
+        "Backlogs",
+        "Graduation Year",
+        "Selected Target Role",
+        "Overall Readiness Score (%)",
+        "Roadmap Progress (%)",
+        "Completed Tasks / Total Tasks",
+        "Missing Skills",
+        "Consent Share Academic",
+        "Consent Share Roadmap",
+        "Consent Share Interview Scores",
+      ],
+    ];
+
+    for (const mem of activeMemberships) {
+      const student = await db.users.findById(mem.studentId);
+      if (!student) continue;
+
+      let score = null;
+      let roadmap = null;
+
+      if (mem.consent?.shareInterviewScores) {
+        score = await db.readinessScores.findByUser(student.id);
+      }
+      if (mem.consent?.shareSkillRoadmap) {
+        const roadmaps = await db.roadmaps.findByUser(student.id);
+        roadmap = roadmaps.length > 0 ? roadmaps[0] : null;
+      }
+
+      const c = mem.consent || { shareAcademic: false, shareSkillRoadmap: false, shareInterviewScores: false };
+
+      const name = c.shareAcademic ? student.fullName : "Restricted";
+      const email = c.shareAcademic ? student.email : "Restricted";
+      const roll = c.shareAcademic ? (student.rollNumber || "") : "Restricted";
+      const course = c.shareAcademic ? (student.course || "") : "Restricted";
+      const branch = c.shareAcademic ? (student.branch || "") : "Restricted";
+      const sem = c.shareAcademic ? (student.semester ?? "") : "Restricted";
+      const cgpa = c.shareAcademic ? (student.cgpa ?? "") : "Restricted";
+      const backlogs = c.shareAcademic ? (student.backlogs ?? 0) : "Restricted";
+      const gradYear = c.shareAcademic ? (student.graduationYear || "") : "Restricted";
+
+      const targetRole = c.shareSkillRoadmap ? (student.selectedRole || roadmap?.jobTitle || "") : "Restricted";
+      const readiness = c.shareInterviewScores && score ? (score.overallScore ?? "") : "Restricted";
+      const roadmapProg = c.shareSkillRoadmap && roadmap ? (roadmap.overallProgress ?? 0) : "Restricted";
+      const tasksStr = c.shareSkillRoadmap && roadmap ? `${roadmap.completedTasks || 0}/${roadmap.totalTasks || 0}` : "Restricted";
+      const missingSkillsStr = c.shareSkillRoadmap && roadmap?.skillGap?.missing ? roadmap.skillGap.missing.join("; ") : "Restricted";
+
+      rows.push([
+        student.id,
+        name,
+        email,
+        roll,
+        course,
+        branch,
+        sem,
+        cgpa,
+        backlogs,
+        gradYear,
+        targetRole,
+        readiness,
+        roadmapProg,
+        tasksStr,
+        missingSkillsStr,
+        c.shareAcademic ? "Yes" : "No",
+        c.shareSkillRoadmap ? "Yes" : "No",
+        c.shareInterviewScores ? "Yes" : "No",
+      ].map(sanitizeCsvCell));
+    }
+
+    const csvContent = rows.map((r) => r.join(",")).join("\n");
+    const filename = `PlacementOS_Cohort_Report_${college.name.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    console.log(`[Phase 5 Audit] Officer ${(req as any).user.email} exported CSV report for college ${college.name}`);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.status(200).send(csvContent);
+  } catch (err: any) {
+    console.error("CSV export error:", err);
+    res.status(500).json({ error: "Failed to generate CSV report: " + err.message });
+  }
+});
+
+// 5d. Officer: Export PDF Report of College Placement Analytics & Cohort Summary
+app.get("/api/college/reports/pdf", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const allMemberships = await db.memberships.findByCollege(college.id);
+    const activeMemberships = allMemberships.filter((m) => m.status === "active");
+
+    // Dynamic import of PDFKit
+    const PDFDocument = (await import("pdfkit")).default;
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
+
+    const filename = `PlacementOS_Analytics_Report_${college.name.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    doc.pipe(res);
+
+    // Header styling
+    doc.fillColor("#FF6B00").fontSize(20).font("Helvetica-Bold").text("Placement OS", { align: "left" });
+    doc.fillColor("#111827").fontSize(12).font("Helvetica").text("Institutional Career Readiness & Placement Analytics Report", { align: "left" });
+    doc.moveDown(0.5);
+
+    doc.strokeColor("#E5E7EB").lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown(1);
+
+    // Institution Meta Box
+    doc.fillColor("#1F2937").fontSize(12).font("Helvetica-Bold").text(`Institution: ${college.name}`);
+    doc.fontSize(10).font("Helvetica").text(`Location: ${college.city}, ${college.state} | Code: ${college.code || "N/A"}`);
+    doc.text(`Placement Officer: ${college.officerName} (${college.officerDesignation || "Placement Officer"})`);
+    doc.text(`Generated On: ${new Date().toLocaleString()}`);
+    doc.moveDown(1.5);
+
+    // Summary Metrics Section
+    doc.fillColor("#FF6B00").fontSize(14).font("Helvetica-Bold").text("Executive Cohort Summary");
+    doc.moveDown(0.5);
+
+    let totalReadiness = 0;
+    let countReadiness = 0;
+    let totalRoadmap = 0;
+    let countRoadmap = 0;
+
+    for (const mem of activeMemberships) {
+      const student = await db.users.findById(mem.studentId);
+      if (!student) continue;
+      if (mem.consent?.shareInterviewScores) {
+        const sc = await db.readinessScores.findByUser(student.id);
+        if (sc && typeof sc.overallScore === "number") {
+          totalReadiness += sc.overallScore;
+          countReadiness++;
+        }
+      }
+      if (mem.consent?.shareSkillRoadmap) {
+        const roadmaps = await db.roadmaps.findByUser(student.id);
+        if (roadmaps.length > 0) {
+          totalRoadmap += (roadmaps[0].overallProgress || 0);
+          countRoadmap++;
+        }
+      }
+    }
+
+    const avgReadiness = countReadiness > 0 ? Math.round(totalReadiness / countReadiness) : 0;
+    const avgRoadmap = countRoadmap > 0 ? Math.round(totalRoadmap / countRoadmap) : 0;
+
+    doc.fillColor("#374151").fontSize(10).font("Helvetica");
+    doc.text(`• Total Active Linked Students: ${activeMemberships.length}`);
+    doc.text(`• Students with Evaluated Readiness Score: ${countReadiness}`);
+    doc.text(`• Average Cohort Readiness Score: ${avgReadiness}%`);
+    doc.text(`• Average Roadmap Completion: ${avgRoadmap}%`);
+    doc.moveDown(1.5);
+
+    // Privacy & Data Governance Notice
+    doc.fillColor("#4B5563").fontSize(9).font("Helvetica-Oblique").text(
+      "Data Governance & Privacy Notice: This report was generated dynamically in accordance with student-granted granular consent policies. Raw interview transcripts, AI conversation logs, and resume documents are strictly excluded in compliance with Placement OS privacy standards.",
+      { width: 495 }
+    );
+
+    doc.end();
+
+    console.log(`[Phase 5 Audit] Officer ${(req as any).user.email} exported PDF report for college ${college.name}`);
+  } catch (err: any) {
+    console.error("PDF export error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to generate PDF report: " + err.message });
+    }
+  }
+});
+
+// 3. Unified Login (Students, Placement Officers, Admins)
 app.post("/api/auth/login", async (req: Request, res: Response) => {
   try {
     const clientIp =
@@ -430,16 +1882,28 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
-    let score = await db.readinessScores.findByUser(user.id);
-    if (!score) {
-      const interviews = await db.interviews.findByUser(user.id);
-      const roadmaps = await db.roadmaps.findByUser(user.id);
-      score = await calculatePlacementReadiness(user, interviews, roadmaps);
-      await db.readinessScores.save(score);
-    }
+    let score = null;
+    let suggestedJobs: any[] = [];
+    let collegeData: CollegeDocument | null = null;
 
-    const allJobs = await db.jobs.all();
-    const suggestedJobs = suggestJobRolesForStudent(user, allJobs, 3);
+    if (user.role === "placement_officer") {
+      if (user.collegeId) {
+        collegeData = await db.colleges.findById(user.collegeId);
+      }
+      if (!collegeData) {
+        collegeData = await db.colleges.findByOfficerUserId(user.id);
+      }
+    } else {
+      score = await db.readinessScores.findByUser(user.id);
+      if (!score) {
+        const interviews = await db.interviews.findByUser(user.id);
+        const roadmaps = await db.roadmaps.findByUser(user.id);
+        score = await calculatePlacementReadiness(user, interviews, roadmaps);
+        await db.readinessScores.save(score);
+      }
+      const allJobs = await db.jobs.all();
+      suggestedJobs = suggestJobRolesForStudent(user, allJobs, 3);
+    }
 
     const safeUser = sanitizeUser(user);
 
@@ -447,6 +1911,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       success: true,
       message: "Signed in successfully!",
       user: safeUser,
+      college: collegeData,
       token: sessionToken,
       readinessScore: score,
       suggestedJobs,
@@ -681,15 +2146,28 @@ app.get("/api/auth/me", async (req: Request, res: Response) => {
     }
 
     const safeUser = sanitizeUser(user);
-    const score = await db.readinessScores.findByUser(user.id);
-    const allJobs = await db.jobs.all();
-    const suggestedJobs = suggestJobRolesForStudent(user, allJobs, 3);
+    let collegeData: CollegeDocument | null = null;
+    let score = null;
+    let suggestedJobs: any[] = [];
+
+    if (user.role === "placement_officer") {
+      if (user.collegeId) {
+        collegeData = await db.colleges.findById(user.collegeId);
+      }
+      if (!collegeData) {
+        collegeData = await db.colleges.findByOfficerUserId(user.id);
+      }
+    } else {
+      score = await db.readinessScores.findByUser(user.id);
+      const allJobs = await db.jobs.all();
+      suggestedJobs = suggestJobRolesForStudent(user, allJobs, 3);
+    }
 
     const token =
       req.cookies?.placement_session_token ||
       req.headers.authorization?.replace(/^Bearer\s+/i, "");
 
-    res.json({ user: safeUser, token, readinessScore: score, suggestedJobs });
+    res.json({ user: safeUser, college: collegeData, token, readinessScore: score, suggestedJobs });
   } catch (err: any) {
     console.error("Auth me error:", err);
     res.status(500).json({ error: "Failed to fetch user session: " + err.message });

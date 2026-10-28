@@ -20,6 +20,8 @@ import {
   RotateCcw,
   X,
   ArrowLeft,
+  Building2,
+  ArrowRight,
 } from "lucide-react";
 
 interface RegisterProps {
@@ -187,9 +189,7 @@ export const Register: React.FC<RegisterProps> = ({
       errors.otherBranch = "Please specify your branch.";
     }
 
-    if (!college.trim()) {
-      errors.college = "College Name is required.";
-    }
+    // College Name is optional for independent learners (defaults to "Independent Learner" if blank)
 
     const numCgpa = parseFloat(cgpa);
     if (!cgpa.trim()) {
@@ -241,7 +241,7 @@ export const Register: React.FC<RegisterProps> = ({
         course,
         semester: Number(semester),
         branch: finalBranch,
-        college: college.trim(),
+        college: college.trim() || "Independent Learner",
         graduationYear: new Date().getFullYear() + ((course === "Diploma" || course === "BCA" ? 3 : 4) - Math.ceil(Number(semester) / 2)),
         cgpa: parseFloat(cgpa),
         password,
@@ -420,9 +420,26 @@ export const Register: React.FC<RegisterProps> = ({
             Create Student Account
           </h2>
           <p className="text-[14px] sm:text-[15px] text-[#737373] mt-1.5 leading-relaxed">
-            Register your academic profile to activate Placement OS career
+            Register your student profile to activate Placement OS career
             readiness tracking.
           </p>
+        </div>
+
+        {/* College Placement Officer Switch Banner */}
+        <div className="mb-6 p-3.5 rounded-[9px] bg-[#18191B] border border-[#2B2D31] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-sm">
+          <div className="flex items-center gap-2.5">
+            <Building2 className="h-4 w-4 text-[#FF6B00] shrink-0" />
+            <span className="text-[13px] text-[#D4D4D8]">
+              Are you a College Placement Officer / TPO?
+            </span>
+          </div>
+          <a
+            href="/college/register"
+            className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[#FF6B00] hover:text-[#ff8533] transition-colors whitespace-nowrap"
+          >
+            <span>Register College Portal</span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </a>
         </div>
 
         {/* Success Alert */}
@@ -621,12 +638,12 @@ export const Register: React.FC<RegisterProps> = ({
                 />
               </div>
 
-              {/* College Name */}
+              {/* College Name (Optional for Independent Learners) */}
               <div className="sm:col-span-2">
                 <AuthInput
                   id="reg-input-college"
-                  label="College Name *"
-                  placeholder="e.g. Delhi Technological University"
+                  label="College / Institution (Optional for Independent Learners)"
+                  placeholder="e.g. National Institute of Technology (or leave blank if independent)"
                   value={college}
                   onChange={(e) => {
                     setCollege(e.target.value);
@@ -635,7 +652,6 @@ export const Register: React.FC<RegisterProps> = ({
                     }
                   }}
                   error={fieldErrors.college}
-                  required
                 />
               </div>
             </div>

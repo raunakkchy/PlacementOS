@@ -1,7 +1,9 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { PlacementLogo } from "../branding/PlacementLogo";
 import { CareerIllustration } from "../branding/CareerIllustration";
 import { FeatureItem } from "./FeatureItem";
+import { Footer } from "../navigation/Footer";
 
 interface AuthLayoutProps {
   children: React.ReactNode;
@@ -18,10 +20,11 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
     return (
       <div className="w-full min-h-screen min-h-[100dvh] bg-[#FAF9F5] text-[#111315] flex flex-col font-sans selection:bg-[#111315] selection:text-white antialiased overflow-y-auto overscroll-y-auto">
         <main className="flex-1 w-full flex flex-col justify-start items-center px-4 py-8 sm:px-8 sm:py-12 lg:px-12 lg:py-14 min-h-max">
-          <div className={`w-full ${wide ? "max-w-[620px]" : "max-w-[420px]"}`}>
+          <div className={`w-full ${wide ? "max-w-[720px]" : "max-w-[420px]"}`}>
             {children}
           </div>
         </main>
+        <Footer />
       </div>
     );
   }
@@ -64,13 +67,20 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
               </div>
             </div>
 
-            {/* Bottom: Tagline */}
-            <footer className="text-[9px] font-normal text-[#737373] tracking-wide flex items-center gap-1.5 flex-wrap select-none">
-              <span>Better Skills</span>
-              <span className="text-[#999]">→</span>
-              <span>Better Opportunities</span>
-              <span className="text-[#999]">→</span>
-              <span>A Brighter Future</span>
+            {/* Bottom: Tagline & Legal */}
+            <footer className="text-[9px] font-normal text-[#737373] tracking-wide flex items-center justify-between gap-1 flex-wrap select-none">
+              <div className="flex items-center gap-1">
+                <span>Better Skills</span>
+                <span className="text-[#999]">→</span>
+                <span>Future</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[8.5px]">
+                <Link to="/privacy" className="hover:text-[#111315]">Privacy</Link>
+                <span>·</span>
+                <Link to="/terms" className="hover:text-[#111315]">Terms</Link>
+                <span>·</span>
+                <Link to="/ai-disclaimer" className="hover:text-[#111315]">AI Notice</Link>
+              </div>
             </footer>
           </div>
 
@@ -101,13 +111,22 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({
               <CareerIllustration className="max-w-[540px] sm:max-w-[600px] lg:max-w-[660px] xl:max-w-[740px] 2xl:max-w-[820px] max-h-[48vh] w-full h-full" />
             </div>
 
-            {/* Bottom-Left: Footer Tagline */}
-            <footer className="pt-2 text-[12px] sm:text-[13px] font-normal text-[#737373] tracking-wide flex items-center gap-2 flex-wrap select-none">
-              <span>Better Skills</span>
-              <span className="text-[#999]">→</span>
-              <span>Better Opportunities</span>
-              <span className="text-[#999]">→</span>
-              <span>A Brighter Future</span>
+            {/* Bottom-Left: Footer Tagline & Legal */}
+            <footer className="pt-2 text-[11px] sm:text-[12px] font-normal text-[#737373] tracking-wide flex items-center justify-between gap-2 flex-wrap select-none border-t border-[#E5E3DE]/60 mt-1">
+              <div className="flex items-center gap-1.5">
+                <span>Better Skills</span>
+                <span className="text-[#999]">→</span>
+                <span>Better Opportunities</span>
+                <span className="text-[#999]">→</span>
+                <span>A Brighter Future</span>
+              </div>
+              <div className="flex items-center gap-2 text-[11px]">
+                <Link to="/privacy" className="hover:text-[#111315] hover:underline transition-colors">Privacy</Link>
+                <span>·</span>
+                <Link to="/terms" className="hover:text-[#111315] hover:underline transition-colors">Terms</Link>
+                <span>·</span>
+                <Link to="/ai-disclaimer" className="hover:text-[#111315] hover:underline transition-colors">AI Disclaimer</Link>
+              </div>
             </footer>
           </div>
         </section>
