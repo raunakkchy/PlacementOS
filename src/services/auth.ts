@@ -89,11 +89,32 @@ export async function loginStudent(credentials: {
   email: string;
   password: string;
 }): Promise<AuthResponse> {
+  return loginWithPortal(credentials, "student");
+}
+
+export async function loginCollegeOfficer(credentials: {
+  email: string;
+  password: string;
+}): Promise<AuthResponse> {
+  return loginWithPortal(credentials, "college");
+}
+
+export async function loginAdmin(credentials: {
+  email: string;
+  password: string;
+}): Promise<AuthResponse> {
+  return loginWithPortal(credentials, "admin");
+}
+
+async function loginWithPortal(
+  credentials: { email: string; password: string },
+  portal: "student" | "college" | "admin"
+): Promise<AuthResponse> {
   const email = credentials.email.trim();
   const password = credentials.password;
 
   if (!email) {
-    throw new Error("Please enter your email or roll number.");
+    throw new Error("Please enter your email.");
   }
   if (!password) {
     throw new Error("Password is required.");
@@ -105,7 +126,7 @@ export async function loginStudent(credentials: {
       "Content-Type": "application/json",
     },
     credentials: "include",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, portal }),
   });
 
   const data = await parseApiResponse(res, "Invalid login credentials.");

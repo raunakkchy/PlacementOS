@@ -219,15 +219,15 @@ export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ user }) => {
           </p>
           <div className="p-4 rounded-lg bg-neutral-100 border border-neutral-200 text-neutral-800 text-xs sm:text-sm space-y-1">
             <p>
-              <strong>Developer & Data Controller:</strong> Raunak Chaudhary
+              <strong>Data Controller:</strong> Placement OS Privacy & Compliance
             </p>
             <p>
               <strong>Email:</strong>{" "}
               <a
-                href="mailto:raunakkchy@gmail.com"
+                href="mailto:privacy@placementos.com"
                 className="text-[#FF6B00] hover:underline font-medium"
               >
-                raunakkchy@gmail.com
+                privacy@placementos.com
               </a>
             </p>
             <p>

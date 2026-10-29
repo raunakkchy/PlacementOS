@@ -6,11 +6,14 @@ import {
   Navigate,
   useNavigate,
   useLocation,
+  useParams,
 } from "react-router-dom";
 import { LoginPage } from "../pages/Login";
 import { RegisterPage } from "../pages/Register";
 import { ForgotPasswordPage } from "../pages/ForgotPassword";
 import { CollegeRegisterPage } from "../pages/CollegeRegister";
+import { CollegeLoginPage } from "../pages/CollegeLogin";
+import { AdminLoginPage } from "../pages/AdminLogin";
 import { CollegeDashboard } from "../pages/CollegeDashboard";
 import { PrivacyPolicy } from "../pages/PrivacyPolicy";
 import { TermsOfService } from "../pages/TermsOfService";
@@ -21,6 +24,7 @@ import { ContactPage } from "../pages/ContactPage";
 import { FaqPage } from "../pages/FaqPage";
 import { AdminCollegesPage } from "../pages/AdminColleges";
 import { AuthResponse, logoutStudent } from "../services/auth";
+import { ShieldAlert } from "lucide-react";
 
 interface AppRoutesProps {
   user: any | null;
@@ -29,6 +33,67 @@ interface AppRoutesProps {
     | React.ReactNode
     | ((navigate: (path: string, options?: any) => void) => React.ReactNode);
 }
+
+// Private Super Admin Portal with parameterized secret path (no secret exposed in client code)
+const AdminPrivatePortal: React.FC<{
+  user: any | null;
+  onAuthSuccess: (authData: AuthResponse) => void;
+}> = ({ user, onAuthSuccess }) => {
+  const { secret } = useParams<{ secret: string }>();
+
+  // If already logged in as non-admin (e.g. student or placement_officer)
+  if (user && user.role !== "admin") {
+    return (
+      <div className="min-h-screen bg-[#0F1012] flex items-center justify-center p-6 text-center font-sans">
+        <div className="max-w-md bg-[#16171A] border border-[#26282E] rounded-2xl p-8 shadow-2xl space-y-4">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <h1 className="text-xl font-bold text-white tracking-tight">Access Denied</h1>
+          <p className="text-xs text-[#A1A1AA] leading-relaxed">
+            You are currently signed in as a <span className="font-semibold text-rose-300 capitalize">{user.role}</span> account. This console requires verified Super Administrator privileges.
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={async () => {
+                await logoutStudent();
+                window.location.reload();
+              }}
+              className="w-full px-4 py-2.5 bg-[#FF6B00] hover:bg-[#e56000] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+            >
+              Sign Out & Switch Account
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // If unauthenticated, render AdminLoginPage
+  if (!user) {
+    return (
+      <AdminLoginPage
+        onSuccess={(authData) => {
+          onAuthSuccess(authData);
+        }}
+        onNavigateToStudentLogin={() => {
+          window.location.href = "/login";
+        }}
+      />
+    );
+  }
+
+  // If authenticated as admin, render AdminCollegesPage
+  return (
+    <AdminCollegesPage
+      user={user}
+      onLogout={async () => {
+        await logoutStudent();
+        window.location.href = `/private-control/${secret || ""}`;
+      }}
+    />
+  );
+};
 
 const RouteBridge: React.FC<AppRoutesProps> = ({
   user,
@@ -45,7 +110,9 @@ const RouteBridge: React.FC<AppRoutesProps> = ({
   const handleLoginSuccess = (authData: AuthResponse) => {
     onAuthSuccess(authData);
     if (authData.user?.role === "admin") {
-      navigate("/admin/colleges");
+      if (!location.pathname.startsWith("/private-control/")) {
+        navigate("/dashboard");
+      }
     } else if (authData.user?.role === "placement_officer") {
       navigate("/college/dashboard");
     } else {
@@ -59,9 +126,7 @@ const RouteBridge: React.FC<AppRoutesProps> = ({
       : dashboardComponent;
 
   const defaultUserHome =
-    user?.role === "admin"
-      ? "/admin/colleges"
-      : user?.role === "placement_officer"
+    user?.role === "placement_officer"
       ? "/college/dashboard"
       : "/dashboard";
 
@@ -104,6 +169,20 @@ const RouteBridge: React.FC<AppRoutesProps> = ({
               onSuccess={handleLoginSuccess}
               onNavigateToLogin={() => navigate("/login")}
               onNavigateToStudentRegister={() => navigate("/register")}
+            />
+          )
+        }
+      />
+      <Route
+        path="/college/login"
+        element={
+          user ? (
+            <Navigate to={defaultUserHome} replace />
+          ) : (
+            <CollegeLoginPage
+              onSuccess={handleLoginSuccess}
+              onNavigateToLogin={() => navigate("/login")}
+              onNavigateToCollegeRegister={() => navigate("/college/register")}
             />
           )
         }
@@ -162,29 +241,25 @@ const RouteBridge: React.FC<AppRoutesProps> = ({
           )
         }
       />
+
+      {/* Secret Super Admin Private Entry Route (Parameterized, Zero Frontend Secret Storage) */}
       <Route
-        path="/admin/colleges"
+        path="/private-control/:secret/*"
         element={
-          user ? (
-            user.role === "admin" ? (
-              <AdminCollegesPage
-                user={user}
-                onLogout={async () => {
-                  await logoutStudent();
-                  window.location.href = "/login";
-                }}
-              />
-            ) : (
-              <Navigate to={defaultUserHome} replace />
-            )
-          ) : (
-            <Navigate to="/login" replace state={{ from: location }} />
-          )
+          <AdminPrivatePortal
+            user={user}
+            onAuthSuccess={handleLoginSuccess}
+          />
         }
       />
       <Route
-        path="/admin"
-        element={<Navigate to="/admin/colleges" replace />}
+        path="/private-control/:secret"
+        element={
+          <AdminPrivatePortal
+            user={user}
+            onAuthSuccess={handleLoginSuccess}
+          />
+        }
       />
 
       {/* Public Legal & Informational Pages */}

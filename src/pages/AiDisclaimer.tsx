@@ -136,15 +136,14 @@ export const AiDisclaimer: React.FC<AiDisclaimerProps> = ({ user }) => {
             User feedback helps us calibrate model prompts and scoring thresholds.
           </p>
           <p>
-            Contact the developer with suggestions or bug reports:{" "}
-            <strong>Raunak Chaudhary</strong> (
+            Contact the engineering team with suggestions or bug reports:{" "}
             <a
-              href="mailto:raunakkchy@gmail.com"
+              href="mailto:support@placementos.com"
               className="text-[#FF6B00] hover:underline font-medium"
             >
-              raunakkchy@gmail.com
+              support@placementos.com
             </a>
-            ).
+            .
           </p>
         </section>
       </div>

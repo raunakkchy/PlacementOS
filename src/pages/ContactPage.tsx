@@ -14,7 +14,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({ user }) => {
   const [copied, setCopied] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  const officialEmail = "raunakkchy@gmail.com";
+  const officialEmail = "support@placementos.com";
 
   const handleCopy = () => {
     navigator.clipboard.writeText(officialEmail);
@@ -40,7 +40,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({ user }) => {
     <PublicLayout
       user={user}
       pageTitle="Contact & Support"
-      badge="Direct Developer Channel"
+      badge="Official Support Channel"
     >
       <div className="space-y-10 text-neutral-800 leading-relaxed text-sm sm:text-base">
         {/* Intro */}
@@ -51,7 +51,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({ user }) => {
           <p className="text-neutral-700 leading-relaxed">
             Have questions about your placement readiness score, mock interview
             simulations, bug reports, or feature requests? Reach out directly to
-            the developer.
+            our team.
           </p>
         </section>
 
@@ -63,11 +63,10 @@ export const ContactPage: React.FC<ContactPageProps> = ({ user }) => {
                 <Mail className="w-5 h-5" />
               </div>
               <h3 className="text-base font-bold text-[#111315]">
-                Direct Developer Email
+                Official Support Channel
               </h3>
               <p className="text-xs sm:text-sm text-neutral-600">
-                You can email developer Raunak Chaudhary directly for support,
-                account questions, or feedback:
+                You can email our support team directly for assistance, account questions, or feedback:
               </p>
 
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-neutral-100 border border-neutral-200">

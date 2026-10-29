@@ -1454,99 +1454,48 @@ async function seedDefaultJobs(): Promise<void> {
   }
 }
 
-// Helper to seed default active student profile if database is fresh
+// Helper to seed default active student profile (strictly disabled in production)
 export async function seedDefaultStudent(): Promise<void> {
-  try {
-    const validHash = "$2b$10$Zln48d6JP1P3jF5x2f4UG.UFB5d8cDty4gsxAQQ9FMpADeXfqTroy"; // bcrypt hash of Password@123
-    const existingStudent = await UserModel.findOne({ email: "raunakkchy@gmail.com" }).exec();
-    if (existingStudent) {
-      if (existingStudent.passwordHash !== validHash) {
-        existingStudent.passwordHash = validHash;
-        await existingStudent.save();
-      }
-    } else {
-      const demoId = "student-raunak-default";
-      const demoEmail = "raunakkchy@gmail.com";
-      const demoUser: UserDocument = {
-        id: demoId,
-        email: demoEmail,
-        passwordHash: validHash,
-        fullName: "Raunak Chaudhary",
-        role: "student",
-        verificationStatus: "verified",
-        phone: "+91 9876543210",
-        rollNumber: "21CS042",
-        college: "National Institute of Technology",
-        course: "B.Tech",
-        branch: "Computer Science",
-        semester: 7,
-        cgpa: 8.65,
-        tenthMarks: 94,
-        twelfthMarks: 91,
-        graduationYear: 2026,
-        courseDuration: "4 Years",
-        backlogs: 0,
-        skills: [
-          "Data Structures & Algorithms",
-          "JavaScript",
-          "TypeScript",
-          "React",
-          "Node.js",
-          "Python",
-          "SQL",
-          "System Design",
-          "Git",
-          "Docker",
-        ],
-        skillsWithLevels: [
-          { name: "Data Structures & Algorithms", level: "Advanced" },
-          { name: "JavaScript", level: "Advanced" },
-          { name: "React", level: "Advanced" },
-          { name: "Node.js", level: "Intermediate" },
-          { name: "Python", level: "Intermediate" },
-          { name: "SQL", level: "Intermediate" },
-          { name: "System Design", level: "Intermediate" },
-        ],
-        targetRoles: ["Software Development Engineer", "Full Stack Developer", "Backend Engineer"],
-        selectedRole: "Software Development Engineer",
-        onboardingCompleted: true,
-        careerPreferences: {
-          careerGoal: "Software Development Engineer",
-          preferredField: "Software Development",
-          preferredJobType: "Full-time",
-        },
-        projects: [
-          {
-            id: "proj-1",
-            title: "Campus Placement OS Platform",
-            description: "Full-stack AI assessment engine with real-time adaptive mock interviews, dynamic skill gap analysis, and tailored roadmaps.",
-            techStack: ["React", "TypeScript", "Node.js", "Express", "MongoDB", "Gemini AI"],
-            githubUrl: "https://github.com",
-            liveUrl: "https://placementos.app",
-          },
-        ],
-        experience: {
-          hasExperience: true,
-          company: "Tech Mahindra",
-          role: "Software Engineering Intern",
-          duration: "3 Months (Summer 2025)",
-          description: "Developed REST APIs for telemetry aggregation and optimized database queries by 35%.",
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      await UserModel.create(demoUser);
+  // Production protection: NEVER seed synthetic or demo students in production
+  if (process.env.NODE_ENV === "production" || process.env.DISABLE_DEMO_SEEDING === "true") {
+    return;
+  }
 
-      // Create persistent session
-      const sessionToken = "placement_session_default_raunak";
-      await SessionModel.create({
-        token: sessionToken,
-        userId: demoId,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-      });
-      console.log(`[MongoDB] Initialized default student profile for ${demoEmail}`);
+  try {
+    const bcrypt = (await import("bcryptjs")).default;
+    const demoEmail = process.env.DEMO_STUDENT_EMAIL || "student.demo@placementos.com";
+    const demoPassword = process.env.DEMO_STUDENT_PASSWORD || "Password@123";
+
+    const existingStudent = await UserModel.findOne({ email: demoEmail }).exec();
+    if (existingStudent) {
+      return;
     }
+
+    const passwordHash = await bcrypt.hash(demoPassword, 10);
+    const demoId = "student-demo-fresh";
+    const demoUser: UserDocument = {
+      id: demoId,
+      email: demoEmail,
+      passwordHash,
+      fullName: "Demo Student",
+      role: "student",
+      verificationStatus: "verified",
+      phone: "+91 9876500000",
+      college: "Technical Institute of Technology",
+      course: "B.Tech",
+      branch: "Computer Science",
+      semester: 1,
+      cgpa: null as any,
+      backlogs: 0,
+      skills: [],
+      skillsWithLevels: [],
+      targetRoles: [],
+      onboardingCompleted: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await UserModel.create(demoUser);
+    console.log(`[MongoDB] Initialized development demo student (${demoEmail}) - login required to obtain session.`);
   } catch (err: any) {
     console.error("[MongoDB] Error checking/seeding student profile:", err.message);
   }
@@ -1555,41 +1504,56 @@ export async function seedDefaultStudent(): Promise<void> {
 // Helper to seed platform administrator if database has no admin account
 export async function seedDefaultAdmin(): Promise<void> {
   try {
-    const validHash = "$2b$10$Zln48d6JP1P3jF5x2f4UG.UFB5d8cDty4gsxAQQ9FMpADeXfqTroy"; // bcrypt hash of Password@123
     const existingAdmin = await UserModel.findOne({ role: "admin" }).exec();
     if (existingAdmin) {
-      if (existingAdmin.passwordHash !== validHash) {
-        existingAdmin.passwordHash = validHash;
-        await existingAdmin.save();
-      }
-    } else {
-      const adminId = "admin-platform-root";
-      const adminEmail = "admin@placementos.com";
-      const adminUser: UserDocument = {
-        id: adminId,
-        email: adminEmail,
-        passwordHash: validHash,
-        fullName: "Placement OS Operations Admin",
-        role: "admin",
-        verificationStatus: "verified",
-        phone: "+91 9999900000",
-        designation: "Platform Verification Director",
-        college: "Placement OS Headquarters",
-        course: "Administration",
-        branch: "Operations",
-        semester: 1,
-        cgpa: 10,
-        backlogs: 0,
-        skills: ["Verification", "Compliance", "Security Review"],
-        targetRoles: ["Platform Administrator"],
-        onboardingCompleted: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await UserModel.create(adminUser);
-      console.log(`[MongoDB] Initialized default platform administrator (${adminEmail})`);
+      // Existing admin account found: NEVER overwrite their password or reset credentials
+      return;
     }
+
+    const adminEmail = (process.env.ADMIN_EMAIL?.trim().toLowerCase()) || "admin@placementos.com";
+    let passwordHash = "";
+
+    const bcrypt = (await import("bcryptjs")).default;
+
+    if (process.env.ADMIN_INITIAL_PASSWORD && process.env.ADMIN_INITIAL_PASSWORD.trim().length >= 8) {
+      passwordHash = await bcrypt.hash(process.env.ADMIN_INITIAL_PASSWORD.trim(), 10);
+    } else if (process.env.NODE_ENV === "production") {
+      // In production, if no initial password is configured, generate a high-entropy initial key
+      const crypto = (await import("crypto")).default;
+      const generatedPass = crypto.randomBytes(18).toString("base64");
+      passwordHash = await bcrypt.hash(generatedPass, 10);
+      console.warn(`[Security Alert] Fresh production database initialized. Set ADMIN_INITIAL_PASSWORD in environment variables for your administrator account.`);
+    } else {
+      // Development / Staging fallback hash dynamically computed
+      const devPass = process.env.ADMIN_DEV_INITIAL_PASSWORD || "Password@123";
+      passwordHash = await bcrypt.hash(devPass, 10);
+    }
+
+    const adminId = "admin-platform-root";
+    const adminUser: UserDocument = {
+      id: adminId,
+      email: adminEmail,
+      passwordHash,
+      fullName: "Placement OS Operations Admin",
+      role: "admin",
+      verificationStatus: "verified",
+      phone: "+91 9999900000",
+      designation: "Platform Verification Director",
+      college: "Placement OS Headquarters",
+      course: "Administration",
+      branch: "Operations",
+      semester: 1,
+      cgpa: 10,
+      backlogs: 0,
+      skills: ["Verification", "Compliance", "Security Review"],
+      targetRoles: ["Platform Administrator"],
+      onboardingCompleted: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await UserModel.create(adminUser);
+    console.log(`[MongoDB] Initialized platform administrator record (${adminEmail}).`);
   } catch (err: any) {
     console.error("[MongoDB] Error checking/seeding platform admin:", err.message);
   }

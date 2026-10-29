@@ -107,10 +107,10 @@ export const AboutPage: React.FC<AboutPageProps> = ({ user }) => {
             </p>
             <div className="pt-2">
               <a
-                href="mailto:raunakkchy@gmail.com"
+                href="mailto:support@placementos.com"
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#FF6B00] hover:underline"
               >
-                Contact Developer (raunakkchy@gmail.com) →
+                Contact Support (support@placementos.com) →
               </a>
             </div>
           </div>

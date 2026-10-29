@@ -85,37 +85,63 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
     }
   }, [user.id, user.selectedRole]);
 
-  // Real or computed scores
-  const overallPercent =
-    score?.overallScore !== undefined
-      ? score.overallScore
-      : data?.overallProgress?.roadmapCompletionPercent !== undefined
-      ? data.overallProgress.roadmapCompletionPercent
-      : 68;
+  // Real or computed scores (strictly genuine data with zero fake fallbacks)
+  const hasAcademicData = Boolean(user.cgpa && user.cgpa > 0);
+  const academicScore: number | null =
+    score?.categoryScores?.academic?.score ?? (hasAcademicData ? Math.min(Math.round((user.cgpa as number) * 10), 100) : null);
 
-  const academicScore = score?.categoryScores?.academic?.score ?? (user.cgpa ? Math.min(Math.round(user.cgpa * 10), 100) : 85);
-  const skillsScore = score?.categoryScores?.technicalSkills?.score ?? (user.skills && user.skills.length >= 4 ? 75 : 60);
-  const roadmapScore = score?.categoryScores?.roadmap?.score ?? (data?.roadmap?.progressPercentage || 45);
-  const interviewScore = score?.categoryScores?.interview?.score ?? (data?.latestInterview?.score || 30);
+  const hasSkillsData = Boolean(user.skills && user.skills.length > 0);
+  const skillsScore: number | null =
+    score?.categoryScores?.technicalSkills?.score ?? (hasSkillsData ? Math.min(user.skills.length * 15, 100) : null);
+
+  const hasRoadmapData = Boolean(data?.roadmap && data.roadmap.totalTasks > 0);
+  const roadmapScore: number | null =
+    score?.categoryScores?.roadmap?.score ?? (hasRoadmapData ? data?.roadmap?.progressPercentage ?? 0 : null);
+
+  const hasInterviewData = Boolean(data?.latestInterview?.scoreAssessed && data?.latestInterview?.score !== undefined);
+  const interviewScore: number | null =
+    score?.categoryScores?.interview?.score ?? (hasInterviewData ? data?.latestInterview?.score ?? 0 : null);
+
+  // Overall readiness percentage
+  const calculatedOverall = (() => {
+    if (score?.overallScore !== undefined) return score.overallScore;
+    if (data?.overallProgress?.roadmapCompletionPercent !== undefined && (hasRoadmapData || hasInterviewData)) {
+      return data.overallProgress.roadmapCompletionPercent;
+    }
+    const validScores = [academicScore, skillsScore, roadmapScore, interviewScore].filter((s): s is number => s !== null);
+    if (validScores.length === 0) return 0;
+    return Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length);
+  })();
+  const overallPercent = calculatedOverall;
 
   // Target role details
   const selectedRoleName =
     user.selectedRole ||
     data?.targetRole?.role ||
     (user.aiJobRecommendations?.recommendedRoles && user.aiJobRecommendations.recommendedRoles[0]?.role) ||
-    "Frontend Developer";
+    null;
 
   // Find matching job recommendation for tags and match %
-  const matchedJob = user.aiJobRecommendations?.recommendedRoles?.find(
-    (r) => r.role.toLowerCase() === selectedRoleName.toLowerCase()
-  ) || user.aiJobRecommendations?.recommendedRoles?.[0];
+  const matchedJob = selectedRoleName
+    ? user.aiJobRecommendations?.recommendedRoles?.find(
+        (r) => r.role.toLowerCase() === selectedRoleName.toLowerCase()
+      ) || user.aiJobRecommendations?.recommendedRoles?.[0]
+    : null;
 
-  const profileMatchPercent = matchedJob?.matchIndicator || 82;
-  const roleTags = matchedJob?.requiredSkills?.slice(0, 4) || ["React", "JavaScript", "HTML", "CSS"];
+  const profileMatchPercent = matchedJob?.matchIndicator ?? (hasSkillsData && selectedRoleName ? Math.min(user.skills.length * 12, 85) : null);
+  const roleTags = matchedJob?.requiredSkills?.slice(0, 4) || (hasSkillsData ? user.skills.slice(0, 4) : []);
 
   // Missing skills count
-  const missingSkillsCount = data?.skills?.missing?.length || (matchedJob?.missingSkills?.length ?? 3);
-  const needsImprovementCount = data?.skills?.needsImprovement?.length || 2;
+  const missingSkillsCount = data?.skills?.missing?.length ?? (matchedJob?.missingSkills?.length ?? 0);
+  const needsImprovementCount = data?.skills?.needsImprovement?.length ?? 0;
+
+  // Resume status
+  const isResumeUploaded = Boolean(
+    user.resumeUploadedAt ||
+    user.resumeFileName ||
+    data?.resume?.isUploaded ||
+    (user.resumeText && user.resumeText.length > 20)
+  );
 
   // Formatted current date
   const todayFormatted = new Date().toLocaleDateString("en-US", {
@@ -332,12 +358,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                       </span>
                       Academic
                     </span>
-                    <span>{academicScore}%</span>
+                    <span>{academicScore !== null ? `${academicScore}%` : "Not Set"}</span>
                   </div>
                   <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-emerald-400 rounded-full transition-all duration-500"
-                      style={{ width: `${academicScore}%` }}
+                      style={{ width: `${academicScore ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -351,12 +377,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                       </span>
                       Skills
                     </span>
-                    <span>{skillsScore}%</span>
+                    <span>{skillsScore !== null ? `${skillsScore}%` : "0%"}</span>
                   </div>
                   <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-cyan-300 rounded-full transition-all duration-500"
-                      style={{ width: `${skillsScore}%` }}
+                      style={{ width: `${skillsScore ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -370,12 +396,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                       </span>
                       Roadmap
                     </span>
-                    <span>{roadmapScore}%</span>
+                    <span>{roadmapScore !== null ? `${roadmapScore}%` : "0%"}</span>
                   </div>
                   <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-[#FF5A36] rounded-full transition-all duration-500"
-                      style={{ width: `${roadmapScore}%` }}
+                      style={{ width: `${roadmapScore ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -389,12 +415,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                       </span>
                       Interview
                     </span>
-                    <span>{interviewScore}%</span>
+                    <span>{interviewScore !== null ? `${interviewScore}%` : "0%"}</span>
                   </div>
                   <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-purple-300 rounded-full transition-all duration-500"
-                      style={{ width: `${interviewScore}%` }}
+                      style={{ width: `${interviewScore ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -414,10 +440,10 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 Current Selected Role
               </div>
               <h2 className="text-sm font-extrabold text-slate-900 truncate">
-                {selectedRoleName}
+                {selectedRoleName || "No Role Selected"}
               </h2>
-              <div className="text-xs font-bold text-emerald-600 mt-0.5">
-                {profileMatchPercent}% Profile Match
+              <div className={`text-xs font-bold ${profileMatchPercent !== null ? "text-emerald-600" : "text-slate-400"} mt-0.5`}>
+                {profileMatchPercent !== null ? `${profileMatchPercent}% Profile Match` : "Select a role to view match"}
               </div>
             </div>
           </div>
@@ -426,7 +452,7 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
             onClick={() => onNavigateTab("jobs")}
             className="shrink-0 text-xs font-bold text-[#2F54EB] bg-blue-50/80 hover:bg-blue-100/80 px-3 py-1.5 rounded-full transition-colors"
           >
-            Change Role &gt;
+            {selectedRoleName ? "Change Role >" : "Select Role >"}
           </button>
         </div>
 
@@ -517,10 +543,14 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 <span>Academic Status</span>
               </div>
               <div className="text-xs font-bold text-slate-900">
-                CGPA <span className="text-emerald-600 font-extrabold">{user.cgpa || 8.5}</span>
+                {user.cgpa ? (
+                  <>CGPA <span className="text-emerald-600 font-extrabold">{user.cgpa}</span></>
+                ) : (
+                  <span className="text-slate-400 font-medium">CGPA Not Set</span>
+                )}
               </div>
               <div className="text-[10px] text-slate-400">
-                Semester {user.semester || 5} • {user.backlogs || 0} Backlogs
+                {user.semester ? `Semester ${user.semester}` : "Semester —"} • {user.backlogs !== undefined ? `${user.backlogs} Backlogs` : "0 Backlogs"}
               </div>
             </div>
 
@@ -530,11 +560,15 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 <FileText className="h-4 w-4 text-blue-600" />
                 <span>Resume Status</span>
               </div>
-              <div className="text-xs font-bold text-emerald-600">
-                {user.resumeUploadedAt || data?.resume?.isUploaded ? "Uploaded" : "Uploaded"}
+              <div className={`text-xs font-bold ${isResumeUploaded ? "text-emerald-600" : "text-amber-600"}`}>
+                {isResumeUploaded ? "Uploaded" : "Not Uploaded"}
               </div>
-              <div className="text-[10px] text-slate-400">
-                Last updated: May 12, 2025
+              <div className="text-[10px] text-slate-400 truncate">
+                {isResumeUploaded
+                  ? user.resumeUploadedAt
+                    ? `Updated ${new Date(user.resumeUploadedAt).toLocaleDateString()}`
+                    : "Ready for review"
+                  : "Upload in profile"}
               </div>
             </div>
 
@@ -545,10 +579,10 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 <span>Selected Role</span>
               </div>
               <div className="text-xs font-bold text-[#2F54EB] truncate">
-                {selectedRoleName}
+                {selectedRoleName || "Not Selected"}
               </div>
-              <div className="text-[10px] text-emerald-600 font-bold">
-                {profileMatchPercent}% Profile Match
+              <div className={`text-[10px] font-bold ${profileMatchPercent !== null ? "text-emerald-600" : "text-slate-400"}`}>
+                {profileMatchPercent !== null ? `${profileMatchPercent}% Profile Match` : "No Match Data"}
               </div>
             </div>
 
@@ -558,11 +592,11 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 <AlertTriangle className="h-4 w-4 text-amber-500" />
                 <span>Skill Gap</span>
               </div>
-              <div className="text-xs font-bold text-rose-600">
-                {missingSkillsCount} Missing Skills
+              <div className="text-xs font-bold text-slate-900">
+                {selectedRoleName ? `${missingSkillsCount} Missing Skills` : "Select a role"}
               </div>
               <div className="text-[10px] text-slate-400">
-                {needsImprovementCount} Needs Improvement
+                {needsImprovementCount > 0 ? `${needsImprovementCount} Needs Improvement` : "Check roadmap"}
               </div>
             </div>
           </div>
@@ -665,12 +699,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                         </span>
                         Academic
                       </span>
-                      <span>{academicScore}%</span>
+                      <span>{academicScore !== null ? `${academicScore}%` : "Not Set"}</span>
                     </div>
                     <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-emerald-500 rounded-full transition-all"
-                        style={{ width: `${academicScore}%` }}
+                        style={{ width: `${academicScore ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -683,12 +717,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                         </span>
                         Skills
                       </span>
-                      <span>{skillsScore}%</span>
+                      <span>{skillsScore !== null ? `${skillsScore}%` : "0%"}</span>
                     </div>
                     <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-[#FF5A36] rounded-full transition-all"
-                        style={{ width: `${skillsScore}%` }}
+                        style={{ width: `${skillsScore ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -701,12 +735,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                         </span>
                         Roadmap
                       </span>
-                      <span>{roadmapScore}%</span>
+                      <span>{roadmapScore !== null ? `${roadmapScore}%` : "0%"}</span>
                     </div>
                     <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-[#2F54EB] rounded-full transition-all"
-                        style={{ width: `${roadmapScore}%` }}
+                        style={{ width: `${roadmapScore ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -719,12 +753,12 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                         </span>
                         Interview
                       </span>
-                      <span>{interviewScore}%</span>
+                      <span>{interviewScore !== null ? `${interviewScore}%` : "0%"}</span>
                     </div>
                     <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-purple-500 rounded-full transition-all"
-                        style={{ width: `${interviewScore}%` }}
+                        style={{ width: `${interviewScore ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -746,14 +780,16 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <h3 className="text-base font-extrabold text-slate-900 truncate">
-                        {selectedRoleName}
+                        {selectedRoleName || "No Role Selected"}
                       </h3>
-                      <span className="rounded-full bg-indigo-50 px-2 py-0.2 text-[10px] font-bold text-[#2F54EB]">
-                        Tech Role
-                      </span>
+                      {selectedRoleName && (
+                        <span className="rounded-full bg-indigo-50 px-2 py-0.2 text-[10px] font-bold text-[#2F54EB]">
+                          Target Role
+                        </span>
+                      )}
                     </div>
-                    <div className="text-xs font-bold text-emerald-600 mt-0.5">
-                      {profileMatchPercent}% Profile Match
+                    <div className={`text-xs font-bold ${profileMatchPercent !== null ? "text-emerald-600" : "text-slate-400"} mt-0.5`}>
+                      {profileMatchPercent !== null ? `${profileMatchPercent}% Profile Match` : "Select a role to view match"}
                     </div>
                   </div>
                 </div>
@@ -762,7 +798,7 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                   onClick={() => onNavigateTab("jobs")}
                   className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#FF5A36] text-[#FF5A36] hover:bg-orange-50 text-xs font-bold transition-all"
                 >
-                  <span>Change Role</span>
+                  <span>{selectedRoleName ? "Change Role" : "Select Role"}</span>
                   <ArrowRight className="h-3 w-3" />
                 </button>
               </div>
@@ -840,10 +876,10 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                   CGPA
                 </div>
                 <div className="text-xl font-extrabold text-slate-900">
-                  {user.cgpa || 8.5}
+                  {user.cgpa ? user.cgpa : <span className="text-sm font-normal text-slate-400">Not Set</span>}
                 </div>
                 <div className="text-[11px] text-slate-400 font-medium">
-                  Semester : {user.semester || 5}
+                  {user.semester ? `Semester : ${user.semester}` : "Semester : Not Specified"}
                 </div>
               </div>
             </div>
@@ -857,14 +893,14 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                 <span>Resume Status</span>
               </div>
               <div className="pt-1">
-                <div className="text-base font-extrabold text-slate-900">
-                  {user.resumeUploadedAt || data?.resume?.isUploaded ? "Uploaded" : "Uploaded"}
+                <div className={`text-base font-extrabold ${isResumeUploaded ? "text-emerald-600" : "text-slate-500"}`}>
+                  {isResumeUploaded ? "Uploaded" : "Not Uploaded"}
                 </div>
                 <button
                   onClick={onOpenProfile}
                   className="mt-2 text-xs font-bold text-[#2F54EB] hover:underline flex items-center gap-1"
                 >
-                  <span>View Resume</span>
+                  <span>{isResumeUploaded ? "View Resume" : "Upload Resume"}</span>
                   <ArrowRight className="h-3 w-3" />
                 </button>
               </div>
@@ -880,13 +916,13 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
               </div>
               <div className="pt-1">
                 <div className="text-sm font-extrabold text-slate-900 truncate">
-                  {selectedRoleName}
+                  {selectedRoleName || "Not Selected"}
                 </div>
                 <button
                   onClick={() => onNavigateTab("jobs")}
                   className="mt-2 text-xs font-bold text-[#2F54EB] hover:underline flex items-center gap-1"
                 >
-                  <span>View Details</span>
+                  <span>{selectedRoleName ? "View Details" : "Select Role"}</span>
                   <ArrowRight className="h-3 w-3" />
                 </button>
               </div>
@@ -902,7 +938,7 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
                   <span>Skill Gap</span>
                 </div>
                 <div className="pt-2 text-sm font-extrabold text-slate-900">
-                  {missingSkillsCount} Missing Skills
+                  {selectedRoleName ? `${missingSkillsCount} Missing Skills` : "No Role Selected"}
                 </div>
                 <button
                   onClick={() => onNavigateTab("roadmap")}
@@ -929,78 +965,129 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
 
         {/* Right Rail: 4 Columns */}
         <div className="col-span-4 space-y-6">
-          {/* Hackathon Achievement Showcase */}
-          <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 p-6 text-white shadow-xl space-y-4 relative overflow-hidden border border-slate-700/60 group">
-            {/* Subtle background glow */}
-            <div className="absolute -right-12 -top-12 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none group-hover:bg-indigo-500/20 transition-all duration-500" />
-            
+          {/* Placement Readiness Checklist (Authentic real-time student onboarding progress) */}
+          <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 p-6 text-white shadow-xl space-y-4 relative overflow-hidden border border-slate-700/60">
             <div className="flex items-start justify-between relative z-10">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800 border border-slate-600/60 text-amber-300 shadow-inner">
-                  <Trophy className="h-5 w-5 text-amber-300" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 shadow-inner">
+                  <Target className="h-5 w-5 text-indigo-300" />
                 </div>
                 <div>
                   <div className="text-[11px] font-extrabold uppercase tracking-widest text-indigo-300">
-                    Hackathon Award
+                    Onboarding & Readiness
                   </div>
                   <h3 className="text-base font-extrabold text-white">
-                    2nd Position Winner
+                    Placement Readiness Checklist
                   </h3>
                 </div>
               </div>
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/90 border border-slate-700 text-xs font-bold text-slate-200 shadow-sm">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                Silver Medalist
+                {[Boolean(selectedRoleName), isResumeUploaded, hasSkillsData, Boolean(hasInterviewData)].filter(Boolean).length} / 4 Complete
               </span>
             </div>
 
-            <div className="space-y-3 relative z-10 pt-1 border-t border-slate-800">
-              <div>
-                <h4 className="text-sm font-extrabold text-amber-200">
-                  SPARK IDEA HACKATHON
-                </h4>
-                <p className="text-xs text-slate-300 font-medium mt-0.5 leading-relaxed">
-                  <strong className="text-white">Winning Project:</strong> Placement OS — An AI-Powered Adaptive Career Readiness & Placement Platform
-                </p>
+            <div className="space-y-2.5 relative z-10 pt-2 border-t border-slate-800">
+              {/* Step 1: Target Role */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {selectedRoleName ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <span className="h-4 w-4 rounded-full border border-slate-500 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">1. Target Job Role</div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {selectedRoleName ? selectedRoleName : "Select your target engineering role"}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onNavigateTab("jobs")}
+                  className="text-xs font-bold text-indigo-300 hover:text-indigo-200 shrink-0 ml-2"
+                >
+                  {selectedRoleName ? "Change" : "Select"}
+                </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
-                <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-700/50">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Team Name</div>
-                  <div className="font-extrabold text-white text-xs mt-0.5">RAUNAKCODER</div>
+              {/* Step 2: Resume */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {isResumeUploaded ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <span className="h-4 w-4 rounded-full border border-slate-500 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">2. Resume Upload</div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {isResumeUploaded ? "Resume file uploaded" : "Upload PDF/DOCX for AI scoring"}
+                    </div>
+                  </div>
                 </div>
-                <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-700/50">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Cash Prize</div>
-                  <div className="font-extrabold text-amber-300 text-xs mt-0.5">₹3,000 + Medal</div>
-                </div>
+                <button
+                  onClick={onOpenProfile}
+                  className="text-xs font-bold text-indigo-300 hover:text-indigo-200 shrink-0 ml-2"
+                >
+                  {isResumeUploaded ? "View" : "Upload"}
+                </button>
               </div>
 
-              <div className="text-xs text-slate-300 space-y-1 bg-slate-800/40 rounded-xl p-3 border border-slate-700/40">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400 font-medium">Team Leader:</span>
-                  <span className="font-bold text-white">Raunak Chaudhary</span>
+              {/* Step 3: Skills */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {hasSkillsData ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <span className="h-4 w-4 rounded-full border border-slate-500 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">3. Technical Skills</div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {hasSkillsData ? `${user.skills.length} skills listed` : "Add programming & technical skills"}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400 font-medium">Team Member:</span>
-                  <span className="font-bold text-white">Ashish Singh</span>
+                <button
+                  onClick={onOpenProfile}
+                  className="text-xs font-bold text-indigo-300 hover:text-indigo-200 shrink-0 ml-2"
+                >
+                  {hasSkillsData ? "Manage" : "Add"}
+                </button>
+              </div>
+
+              {/* Step 4: AI Mock Interview */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {hasInterviewData ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <span className="h-4 w-4 rounded-full border border-slate-500 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">4. AI Mock Interview</div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {hasInterviewData ? `Score: ${interviewScore}/100` : "Complete your first AI interview"}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-700/50">
-                  <span className="text-slate-400 font-medium">Organized By:</span>
-                  <span className="font-bold text-indigo-200 text-right">Startup Cell, New Govt Poly, Patna-13</span>
-                </div>
+                <button
+                  onClick={() => onNavigateTab("interview")}
+                  className="text-xs font-bold text-indigo-300 hover:text-indigo-200 shrink-0 ml-2"
+                >
+                  {hasInterviewData ? "Retake" : "Start"}
+                </button>
               </div>
             </div>
 
             <div className="pt-2 relative z-10">
-              <a
-                href="https://placement-os-g8m3.onrender.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+              <button
+                onClick={() => onNavigateTab(selectedRoleName ? "roadmap" : "jobs")}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all"
               >
-                <span>View Winning Project</span>
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
+                <span>Continue Preparation Plan</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
 
@@ -1015,39 +1102,55 @@ export const ScoreDashboard: React.FC<ScoreDashboardProps> = ({
             </p>
 
             {/* Featured Recommended Role */}
-            <div
-              onClick={() => onNavigateTab("jobs")}
-              className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 hover:border-slate-300 cursor-pointer transition-all space-y-2.5 group"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2F54EB] text-white">
-                    <Code2 className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-extrabold text-slate-900 group-hover:text-[#2F54EB] transition-colors">
-                      {selectedRoleName}
-                    </h4>
-                    <div className="text-xs font-bold text-emerald-600">
-                      {profileMatchPercent}% Match
+            {selectedRoleName ? (
+              <div
+                onClick={() => onNavigateTab("jobs")}
+                className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 hover:border-slate-300 cursor-pointer transition-all space-y-2.5 group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2F54EB] text-white">
+                      <Code2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 group-hover:text-[#2F54EB] transition-colors">
+                        {selectedRoleName}
+                      </h4>
+                      <div className="text-xs font-bold text-emerald-600">
+                        {profileMatchPercent !== null ? `${profileMatchPercent}% Match` : "Target Role"}
+                      </div>
                     </div>
                   </div>
+                  <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-slate-700" />
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-slate-700" />
-              </div>
 
-              {/* Skill Pills */}
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {roleTags.map((tag, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2.5 py-0.5 rounded-full bg-white border border-slate-200 text-[10px] font-bold text-slate-600"
-                  >
-                    {tag}
-                  </span>
-                ))}
+                {/* Skill Pills */}
+                {roleTags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {roleTags.map((tag, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2.5 py-0.5 rounded-full bg-white border border-slate-200 text-[10px] font-bold text-slate-600"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
+            ) : (
+              <div
+                onClick={() => onNavigateTab("jobs")}
+                className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300 hover:border-slate-400 cursor-pointer transition-all text-center space-y-1.5"
+              >
+                <p className="text-xs font-bold text-slate-700">
+                  Select a target role to activate AI matching
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Matches your skill set against real campus recruiting profiles
+                </p>
+              </div>
+            )}
 
             <button
               onClick={() => onNavigateTab("jobs")}

@@ -49,27 +49,10 @@ const upload = multer({
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 app.use(cookieParser());
-app.use(express.static(path.join(process.cwd(), "public")));
 
-const GROQ_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama-3.1-70b-versatile",
-  "llama-3.1-8b-instant",
-  "llama3-70b-8192",
-  "llama3-8b-8192",
-  "mixtral-8x7b-32768",
-  "gemma2-9b-it",
-];
-
-// Health check
-app.get("/api/health", (req: Request, res: Response) => {
-  res.json({
-    status: "online",
-    provider: "Groq",
-    models: GROQ_MODELS,
-    app: "PlacementOS",
-  });
-});
+// ----------------------------------------------------
+// AUTHENTICATION HELPER
+// ----------------------------------------------------
 
 // Auth helper - strictly verifies session token from HTTP-only cookie or Authorization header
 async function getAuthenticatedUser(req: Request): Promise<UserDocument | null> {
@@ -96,7 +79,243 @@ async function getAuthenticatedUser(req: Request): Promise<UserDocument | null> 
   return null;
 }
 
-// Require Auth Middleware
+// ----------------------------------------------------
+// SECURE SUPER ADMIN PRIVATE ROUTE CONFIGURATION & SHIELD
+// ----------------------------------------------------
+
+// Ephemeral in-memory key for production if ADMIN_ROUTE_SECRET is not configured
+let ephemeralAdminSecret: string | null = null;
+
+function getAdminRouteSecret(): string {
+  const envSecret = process.env.ADMIN_ROUTE_SECRET?.trim();
+  if (envSecret && envSecret.length >= 16) {
+    return envSecret;
+  }
+
+  // In production: strictly prevent static predictable fallback; generate ephemeral 256-bit token
+  if (process.env.NODE_ENV === "production") {
+    if (!ephemeralAdminSecret) {
+      ephemeralAdminSecret = crypto.randomBytes(32).toString("hex");
+      console.warn(
+        "[Security Notice] ADMIN_ROUTE_SECRET environment variable is not configured. An ephemeral cryptographically secure 256-bit token has been generated in-memory for this server instance."
+      );
+    }
+    return ephemeralAdminSecret;
+  }
+
+  // Development / Staging fallback when ADMIN_ROUTE_SECRET is not supplied
+  return process.env.ADMIN_ROUTE_SECRET_DEV_FALLBACK || "sec_7f9b2d8e4c1a5b3f6e8d2a4c9b1e7f3a8d0c2e4b6f8a1c3e5d7b9a0f2c4e6b8";
+}
+
+function isValidAdminRouteSecret(providedSecret: string): boolean {
+  if (!providedSecret || typeof providedSecret !== "string") return false;
+  const expectedSecret = getAdminRouteSecret();
+  const providedBuffer = Buffer.from(providedSecret);
+  const expectedBuffer = Buffer.from(expectedSecret);
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+// HTML responses (reusable and opaque)
+const OPAQUE_404_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 Not Found</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #FAF9F5; color: #111315; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .box { max-width: 420px; padding: 40px; text-align: center; }
+    h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+    p { font-size: 14px; color: #737373; margin-bottom: 24px; }
+    a { display: inline-block; padding: 10px 20px; background: #111315; color: #fff; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>404</h1>
+    <p>The requested URL was not found on this server.</p>
+    <a href="/">Return to Home</a>
+  </div>
+</body>
+</html>`;
+
+function sendOpaque404(res: Response): void {
+  res.status(404).type("html").send(OPAQUE_404_HTML);
+}
+
+function sendForbiddenAdminAccess(res: Response, userRole: string): void {
+  res.status(403).type("html").send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>403 Forbidden</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #FAF9F5; color: #111315; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .box { max-width: 440px; padding: 40px; text-align: center; background: #fff; border: 1px solid #E5E3DE; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h1 { font-size: 24px; font-weight: 700; color: #DC2626; margin-bottom: 8px; }
+    p { font-size: 13px; color: #737373; line-height: 1.6; margin-bottom: 24px; }
+    a { display: inline-block; padding: 10px 20px; background: #111315; color: #fff; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>403 Forbidden</h1>
+    <p>Access Denied. You are currently authenticated with a <strong>${userRole}</strong> account. Super Administrator privileges are required to access this console.</p>
+    <a href="/login">Return to Portal</a>
+  </div>
+</body>
+</html>`);
+}
+
+// Comprehensive Admin & Private Route Shield Middleware
+// Sits before static files and Vite / SPA fallback. Completely shields legacy admin routes and
+// strictly enforces private admin route validation. Rejects any repeated-slash,
+// encoded, malformed, or invalid paths with an opaque 404 WITHOUT normalizing.
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  // If request begins with /api/, allow API routers to handle it
+  if (req.path.startsWith("/api/")) {
+    return next();
+  }
+
+  // Extract raw URL path and decoded path
+  const urlCandidate = req.originalUrl || req.url || req.path || "";
+  const rawPath = urlCandidate.split(/[?#]/)[0];
+
+  let decodedPath: string | null = null;
+  let isMalformedUri = false;
+  try {
+    decodedPath = decodeURIComponent(rawPath);
+  } catch {
+    isMalformedUri = true;
+  }
+
+  // A. Check for Legacy Admin Routes
+  // Blocks /admin, //admin, /admin/*, /admin//, /admin/login, /admin/colleges, /something/../admin, etc.
+  const legacyAdminRegex = /(^|\/)\s*admin(\/|\.|$)/i;
+  const isLegacyAdmin =
+    legacyAdminRegex.test(rawPath) ||
+    (decodedPath !== null && legacyAdminRegex.test(decodedPath));
+
+  if (isLegacyAdmin) {
+    return sendOpaque404(res);
+  }
+
+  // B. Check for Private Control Routes
+  const rawLower = rawPath.toLowerCase();
+  const decodedLower = decodedPath ? decodedPath.toLowerCase() : "";
+  const touchesPrivateControl =
+    rawLower.includes("private-control") || decodedLower.includes("private-control");
+
+  if (!touchesPrivateControl) {
+    // Normal student, college, legal, or public route -> continue
+    return next();
+  }
+
+  // If it touches private-control, it MUST strictly conform to the expected format.
+  // Any deviation (repeated slashes, malformed URI, traversal, encoded slashes,
+  // backslashes, wrong secret) is rejected with 404 WITHOUT normalizing.
+
+  // 1. Malformed URI encoding (e.g. invalid % sequences)
+  if (isMalformedUri) {
+    return sendOpaque404(res);
+  }
+
+  // 2. Reject repeated slashes anywhere in raw or decoded path (e.g. //private-control, /private-control//, /private-control/secret//)
+  if (rawPath.includes("//") || (decodedPath !== null && decodedPath.includes("//"))) {
+    return sendOpaque404(res);
+  }
+
+  // 3. Reject directory traversal characters, dot segments, or encoded dots (%2e, %2E)
+  if (
+    rawPath.includes("..") ||
+    rawLower.includes("%2e") ||
+    (decodedPath !== null && decodedPath.includes(".."))
+  ) {
+    return sendOpaque404(res);
+  }
+
+  // 4. Reject encoded slashes (%2f, %2F) or backslashes (\, %5c)
+  if (
+    rawLower.includes("%2f") ||
+    rawPath.includes("\\") ||
+    rawLower.includes("%5c") ||
+    (decodedPath !== null && (decodedPath.includes("\\") || decodedPath.includes("%2f")))
+  ) {
+    return sendOpaque404(res);
+  }
+
+  // 5. Must strictly start with "/private-control/" (exact case, single leading slash)
+  // Rejects bare "/private-control", "/Private-Control", etc.
+  if (!rawPath.startsWith("/private-control/")) {
+    return sendOpaque404(res);
+  }
+
+  // 6. Inspect segments after "/private-control/"
+  const remainder = rawPath.slice("/private-control/".length);
+  const segments = remainder.split("/");
+
+  // First segment is the secret candidate
+  const candidateSecret = segments[0];
+  if (!candidateSecret || !isValidAdminRouteSecret(candidateSecret)) {
+    return sendOpaque404(res);
+  }
+
+  // Subsequent segments (if any) must be valid alphanumeric/dash/underscore (e.g. /colleges)
+  // Note: a single trailing slash yields segments: ["<secret>", ""] which is valid.
+  const subSegments = segments.slice(1);
+  for (let i = 0; i < subSegments.length; i++) {
+    const sub = subSegments[i];
+    // If it's an empty segment, it can only be the final segment (single trailing slash)
+    if (sub === "") {
+      if (i !== subSegments.length - 1) {
+        return sendOpaque404(res);
+      }
+    } else {
+      // Must be standard URL segment
+      if (!/^[a-zA-Z0-9_-]+$/.test(sub)) {
+        return sendOpaque404(res);
+      }
+    }
+  }
+
+  // 7. Route and secret are verified valid!
+  // Check authenticated session for role authorization
+  const currentUser = await getAuthenticatedUser(req);
+  if (currentUser && currentUser.role !== "admin") {
+    // Student or Placement Officer session trying to access admin console
+    return sendForbiddenAdminAccess(res, currentUser.role);
+  }
+
+  // Allowed (unauthenticated visitor to view AdminLoginPage or authenticated admin to view console)
+  next();
+});
+
+// Static public assets (redirect disabled to prevent trailing slash redirects on malformed URLs)
+app.use(express.static(path.join(process.cwd(), "public"), { redirect: false }));
+
+const GROQ_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama3-70b-8192",
+  "llama3-8b-8192",
+  "mixtral-8x7b-32768",
+  "gemma2-9b-it",
+];
+
+// Health check
+app.get("/api/health", (req: Request, res: Response) => {
+  res.json({
+    status: "online",
+    provider: "Groq",
+    models: GROQ_MODELS,
+    app: "PlacementOS",
+  });
+});
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const user = await getAuthenticatedUser(req);
@@ -1850,7 +2069,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       return;
     }
 
-    const { email, password } = req.body;
+    const { email, password, portal } = req.body;
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required." });
@@ -1867,6 +2086,56 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     if (!isMatch) {
       res.status(401).json({ error: "Invalid email or password." });
       return;
+    }
+
+    // Server-side role authorization based strictly on authenticated user record
+    if (portal === "admin") {
+      if (user.role !== "admin") {
+        res.status(403).json({ error: "Access denied. Administrator credentials required." });
+        return;
+      }
+    } else if (portal === "college") {
+      if (user.role !== "placement_officer" && user.role !== "admin") {
+        res.status(403).json({ error: "Access denied. College Placement Officer credentials required. Students must use Student Login." });
+        return;
+      }
+      if (user.role === "placement_officer") {
+        let collegeData: CollegeDocument | null = null;
+        if (user.collegeId) {
+          collegeData = await db.colleges.findById(user.collegeId);
+        }
+        if (!collegeData) {
+          collegeData = await db.colleges.findByOfficerUserId(user.id);
+        }
+        if (collegeData) {
+          if (user.verificationStatus === "suspended" || collegeData.status === "suspended") {
+            res.status(403).json({
+              error: "College account is suspended.",
+              status: "suspended",
+              code: "COLLEGE_SUSPENDED",
+              reason: collegeData.suspensionReason || "Account suspended by platform administrator.",
+            });
+            return;
+          }
+          if (user.verificationStatus === "rejected" || collegeData.status === "rejected") {
+            res.status(403).json({
+              error: "College registration request was rejected.",
+              status: "rejected",
+              code: "COLLEGE_REJECTED",
+              reason: collegeData.rejectionReason || "Registration rejected by platform administrator.",
+            });
+            return;
+          }
+          if (user.verificationStatus !== "verified" || collegeData.status !== "verified") {
+            res.status(403).json({
+              error: "College verification pending. Your college account is under review by the platform administrator.",
+              status: "pending",
+              code: "COLLEGE_VERIFICATION_PENDING",
+            });
+            return;
+          }
+        }
+      }
     }
 
     // Create session token
@@ -3361,13 +3630,13 @@ app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
 
     // 7. Academic Profile
     const academic = {
-      college: user.college || "Engineering College",
-      course: user.course || "B.Tech",
-      branch: user.branch || "Computer Science",
-      semester: user.semester || 1,
+      college: user.college || null,
+      course: user.course || null,
+      branch: user.branch || null,
+      semester: (user.semester !== undefined && user.semester !== null) ? user.semester : null,
       cgpa: (user.cgpa !== undefined && user.cgpa !== null) ? user.cgpa : null,
-      backlogs: user.backlogs || 0,
-      graduationYear: user.graduationYear || new Date().getFullYear(),
+      backlogs: (user.backlogs !== undefined && user.backlogs !== null) ? user.backlogs : 0,
+      graduationYear: user.graduationYear || null,
     };
 
     // 8. Resume Status

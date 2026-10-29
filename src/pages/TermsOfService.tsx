@@ -209,12 +209,12 @@ export const TermsOfService: React.FC<TermsOfServiceProps> = ({ user }) => {
               reach out directly to:
             </p>
             <p>
-              <strong>Raunak Chaudhary</strong> ·{" "}
+              <strong>Placement OS Legal & Compliance</strong> ·{" "}
               <a
-                href="mailto:raunakkchy@gmail.com"
+                href="mailto:legal@placementos.com"
                 className="text-[#FF6B00] hover:underline font-medium"
               >
-                raunakkchy@gmail.com
+                legal@placementos.com
               </a>
             </p>
           </div>

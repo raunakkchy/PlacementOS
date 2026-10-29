@@ -98,10 +98,10 @@ export const FaqPage: React.FC<FaqPageProps> = ({ user }) => {
             </p>
           </div>
           <a
-            href="mailto:raunakkchy@gmail.com"
+            href="mailto:support@placementos.com"
             className="text-xs font-semibold text-[#FF6B00] hover:underline"
           >
-            Email Support (raunakkchy@gmail.com) →
+            Email Support (support@placementos.com) →
           </a>
         </section>
       </div>
