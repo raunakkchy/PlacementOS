@@ -1080,6 +1080,81 @@ app.patch("/api/admin/colleges/:id/suspend", requireAuth, requireRole("admin"), 
   }
 });
 
+// 5. Update Super Admin Credentials (Email / User ID and Password)
+app.patch("/api/admin/credentials", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { currentPassword, newEmail, newPassword, confirmPassword } = req.body || {};
+
+    if (!currentPassword) {
+      res.status(400).json({ error: "Current password is required to update admin credentials." });
+      return;
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, adminUser.passwordHash);
+    if (!isMatch) {
+      res.status(400).json({ error: "Current password is incorrect." });
+      return;
+    }
+
+    const updates: Partial<UserDocument> = {};
+
+    if (newEmail && typeof newEmail === "string") {
+      const cleanEmail = newEmail.toLowerCase().trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(cleanEmail)) {
+        res.status(400).json({ error: "Please provide a valid email address." });
+        return;
+      }
+      if (cleanEmail !== adminUser.email) {
+        const existing = await db.users.findByEmail(cleanEmail);
+        if (existing && existing.id !== adminUser.id) {
+          res.status(409).json({ error: "An account with this email address already exists." });
+          return;
+        }
+        updates.email = cleanEmail;
+      }
+    }
+
+    if (newPassword && typeof newPassword === "string") {
+      if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+        res.status(400).json({ error: "New password and confirmation do not match." });
+        return;
+      }
+      const hasMinLen = newPassword.length >= 8;
+      const hasUpper = /[A-Z]/.test(newPassword);
+      const hasLower = /[a-z]/.test(newPassword);
+      const hasNumber = /[0-9]/.test(newPassword);
+      const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(newPassword);
+
+      if (!hasMinLen || !hasUpper || !hasLower || !hasNumber || !hasSpecial) {
+        res.status(400).json({
+          error: "New password must be at least 8 characters and contain uppercase, lowercase, number, and a special character.",
+        });
+        return;
+      }
+      updates.passwordHash = await bcrypt.hash(newPassword, 10);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: "Please provide a new email or a new password to update." });
+      return;
+    }
+
+    const updatedUser = await db.users.update(adminUser.id, updates);
+    console.log(`[Admin Security] Super Admin credentials updated for admin ID ${adminUser.id}. Email: ${updates.email || adminUser.email}`);
+
+    res.json({
+      success: true,
+      message: "Super Admin credentials updated successfully.",
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (err: any) {
+    console.error("Update admin credentials error:", err);
+    res.status(500).json({ error: "Failed to update admin credentials: " + err.message });
+  }
+});
+
 // ====================================================
 // PHASE 4 — SECURE STUDENT-COLLEGE LINKING SYSTEM
 // ====================================================

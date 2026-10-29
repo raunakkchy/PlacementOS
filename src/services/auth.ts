@@ -306,6 +306,25 @@ export async function suspendCollege(
   return parseApiResponse(res, "Failed to suspend college.");
 }
 
+export async function updateAdminCredentials(data: {
+  currentPassword: string;
+  newEmail?: string;
+  newPassword?: string;
+  confirmPassword?: string;
+}): Promise<{ success: boolean; message: string; user: User }> {
+  const res = await fetch("/api/admin/credentials", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+
+  return parseApiResponse(res, "Failed to update admin credentials.");
+}
+
 export async function getCurrentUser(): Promise<AuthResponse | null> {
   try {
     const res = await fetch("/api/auth/me", {

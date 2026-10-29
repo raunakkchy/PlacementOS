@@ -1501,12 +1501,14 @@ export async function seedDefaultStudent(): Promise<void> {
   }
 }
 
-// Helper to seed platform administrator if database has no admin account
+// Helper to seed platform administrator if database has no admin account, or force-sync if requested
 export async function seedDefaultAdmin(): Promise<void> {
   try {
     const existingAdmin = await UserModel.findOne({ role: "admin" }).exec();
-    if (existingAdmin) {
-      // Existing admin account found: NEVER overwrite their password or reset credentials
+    const forceUpdate = process.env.ADMIN_FORCE_UPDATE_CREDENTIALS === "true";
+
+    if (existingAdmin && !forceUpdate) {
+      // Existing admin account found and no force-update requested: preserve existing credentials
       return;
     }
 
@@ -1527,6 +1529,15 @@ export async function seedDefaultAdmin(): Promise<void> {
       // Development / Staging fallback hash dynamically computed
       const devPass = process.env.ADMIN_DEV_INITIAL_PASSWORD || "Password@123";
       passwordHash = await bcrypt.hash(devPass, 10);
+    }
+
+    if (existingAdmin && forceUpdate) {
+      existingAdmin.email = adminEmail;
+      existingAdmin.passwordHash = passwordHash;
+      existingAdmin.updatedAt = new Date().toISOString();
+      await existingAdmin.save();
+      console.log(`[MongoDB] Force-updated platform administrator record (${adminEmail}) via ADMIN_FORCE_UPDATE_CREDENTIALS.`);
+      return;
     }
 
     const adminId = "admin-platform-root";

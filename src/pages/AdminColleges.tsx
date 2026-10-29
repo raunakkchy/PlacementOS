@@ -5,6 +5,7 @@ import {
   verifyCollege,
   rejectCollege,
   suspendCollege,
+  updateAdminCredentials,
   AdminCollegesResponse,
 } from "../services/auth";
 import { Footer } from "../components/navigation/Footer";
@@ -31,6 +32,7 @@ import {
   X,
   Loader2,
   Lock,
+  KeyRound,
 } from "lucide-react";
 
 interface AdminCollegesProps {
@@ -77,6 +79,16 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
   const [reviewNotesInput, setReviewNotesInput] = useState("");
   const [submittingAction, setSubmittingAction] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Super Admin Credentials Update Modal state
+  const [showCredsModal, setShowCredsModal] = useState(false);
+  const [adminEmailDisplay, setAdminEmailDisplay] = useState(user.email);
+  const [currentPasswordInput, setCurrentPasswordInput] = useState("");
+  const [newEmailInput, setNewEmailInput] = useState(user.email);
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
+  const [credsLoading, setCredsLoading] = useState(false);
+  const [credsError, setCredsError] = useState<string | null>(null);
 
   const fetchColleges = async (isManual = false) => {
     if (isManual) setRefreshing(true);
@@ -213,6 +225,54 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
     }
   };
 
+  const handleUpdateCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCredsError(null);
+
+    if (!currentPasswordInput) {
+      setCredsError("Current password is required.");
+      return;
+    }
+
+    if (newPasswordInput && newPasswordInput !== confirmPasswordInput) {
+      setCredsError("New password and confirmation do not match.");
+      return;
+    }
+
+    const cleanEmail = newEmailInput.trim().toLowerCase();
+    const emailChanged = cleanEmail && cleanEmail !== adminEmailDisplay.toLowerCase();
+    const passwordChanged = Boolean(newPasswordInput);
+
+    if (!emailChanged && !passwordChanged) {
+      setCredsError("Please enter a new email or new password to update.");
+      return;
+    }
+
+    setCredsLoading(true);
+    try {
+      const res = await updateAdminCredentials({
+        currentPassword: currentPasswordInput,
+        newEmail: emailChanged ? cleanEmail : undefined,
+        newPassword: passwordChanged ? newPasswordInput : undefined,
+        confirmPassword: passwordChanged ? confirmPasswordInput : undefined,
+      });
+
+      if (res && res.user && res.user.email) {
+        setAdminEmailDisplay(res.user.email);
+      }
+      setSuccessNotice(res.message || "Super Admin credentials updated successfully.");
+      setShowCredsModal(false);
+      setCurrentPasswordInput("");
+      setNewPasswordInput("");
+      setConfirmPasswordInput("");
+      setTimeout(() => setSuccessNotice(null), 6000);
+    } catch (err: any) {
+      setCredsError(err.message || "Failed to update admin credentials.");
+    } finally {
+      setCredsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0F1012] text-[#F3F4F6] flex flex-col font-sans selection:bg-[#FF6B00]/30 selection:text-white">
       {/* Top Header */}
@@ -242,9 +302,25 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
               {user.fullName}
             </span>
             <span className="text-xs text-[#A1A1AA]">
-              {user.email} (Platform Admin)
+              {adminEmailDisplay} (Platform Admin)
             </span>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowCredsModal(true);
+              setCredsError(null);
+              setCurrentPasswordInput("");
+              setNewPasswordInput("");
+              setConfirmPasswordInput("");
+              setNewEmailInput(adminEmailDisplay);
+            }}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] border border-[#32353E] text-xs font-semibold text-[#E4E4E7] hover:text-white transition-colors cursor-pointer"
+            title="Change Super Admin Email / Password"
+          >
+            <KeyRound className="h-3.5 w-3.5 text-[#FF6B00]" />
+            <span className="hidden sm:inline">Change Credentials</span>
+          </button>
           <button
             type="button"
             onClick={onLogout}
@@ -942,6 +1018,116 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin Credentials Update Modal */}
+      {showCredsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#191B20] border border-[#2D3039] rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setShowCredsModal(false)}
+              className="absolute top-4 right-4 text-[#71717A] hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/30 shrink-0">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Update Super Admin Credentials</h3>
+                <p className="text-xs text-[#A1A1AA]">Modify your Super Admin login email and password.</p>
+              </div>
+            </div>
+
+            {credsError && (
+              <div className="mb-4 p-3 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                <span>{credsError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateCredentials} className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-white block mb-1">
+                  Current Password <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter current password to authorize changes"
+                  value={currentPasswordInput}
+                  onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-[#32353E] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
+                />
+              </div>
+
+              <div className="border-t border-[#26282E] pt-3">
+                <label className="text-xs font-semibold text-white block mb-1">
+                  Super Admin Email (User ID)
+                </label>
+                <input
+                  type="email"
+                  placeholder="admin@placementos.com"
+                  value={newEmailInput}
+                  onChange={(e) => setNewEmailInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-[#32353E] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
+                />
+                <span className="text-[11px] text-[#71717A] mt-1 block">
+                  Leave unchanged if you only want to update your password.
+                </span>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-white block mb-1">
+                  New Password (Optional)
+                </label>
+                <input
+                  type="password"
+                  placeholder="Min 8 chars, uppercase, lowercase, number, symbol"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-[#32353E] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
+                />
+              </div>
+
+              {newPasswordInput && (
+                <div>
+                  <label className="text-xs font-semibold text-white block mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Re-enter new password"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-[#32353E] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
+                  />
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-[#26282E]">
+                <button
+                  type="button"
+                  onClick={() => setShowCredsModal(false)}
+                  className="px-4 py-2 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] text-xs font-semibold text-[#A1A1AA] hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={credsLoading}
+                  className="px-4 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#E56000] text-xs font-semibold text-white flex items-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-[#FF6B00]/20"
+                >
+                  {credsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                  <span>Save New Credentials</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
