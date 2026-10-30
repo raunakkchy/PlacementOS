@@ -227,10 +227,16 @@ export interface AdminCollegesResponse {
 export async function getAdminColleges(params?: {
   status?: string;
   search?: string;
+  sort?: string;
+  startDate?: string;
+  endDate?: string;
 }): Promise<AdminCollegesResponse> {
   const query = new URLSearchParams();
   if (params?.status && params.status !== "all") query.set("status", params.status);
   if (params?.search) query.set("search", params.search);
+  if (params?.sort) query.set("sort", params.sort);
+  if (params?.startDate) query.set("startDate", params.startDate);
+  if (params?.endDate) query.set("endDate", params.endDate);
 
   const res = await fetch(`/api/admin/colleges?${query.toString()}`, {
     headers: {
@@ -244,7 +250,7 @@ export async function getAdminColleges(params?: {
 
 export async function getAdminCollege(
   id: string
-): Promise<{ success: boolean; college: College; officer: User | null }> {
+): Promise<{ success: boolean; college: College; officer: User | null; auditLogs?: any[] }> {
   const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}`, {
     headers: {
       ...getAuthHeaders(),
@@ -304,6 +310,60 @@ export async function suspendCollege(
   });
 
   return parseApiResponse(res, "Failed to suspend college.");
+}
+
+export async function unsuspendCollege(
+  id: string,
+  reviewNotes?: string
+): Promise<{ success: boolean; message: string; college: College }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}/unsuspend`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify({ reviewNotes }),
+  });
+
+  return parseApiResponse(res, "Failed to unsuspend college.");
+}
+
+export async function deleteCollegePermanently(
+  id: string
+): Promise<{ success: boolean; message: string; details: any }> {
+  const res = await fetch(`/api/admin/colleges/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+
+  return parseApiResponse(res, "Failed to permanently delete college.");
+}
+
+export async function getAdminAuditLogs(params?: {
+  targetType?: string;
+  targetId?: string;
+  action?: string;
+  limit?: number;
+}): Promise<{ success: boolean; logs: any[] }> {
+  const query = new URLSearchParams();
+  if (params?.targetType) query.set("targetType", params.targetType);
+  if (params?.targetId) query.set("targetId", params.targetId);
+  if (params?.action) query.set("action", params.action);
+  if (params?.limit) query.set("limit", String(params.limit));
+
+  const res = await fetch(`/api/admin/audit-logs?${query.toString()}`, {
+    headers: {
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+
+  return parseApiResponse(res, "Failed to fetch audit logs.");
 }
 
 export async function updateAdminCredentials(data: {
@@ -688,10 +748,11 @@ export async function revokeCollegeInvitation(id: string) {
   return parseApiResponse(res, "Failed to revoke invitation code.");
 }
 
-export async function getCollegeMemberships(status?: string, search?: string) {
+export async function getCollegeMemberships(status?: string, search?: string, sort?: string) {
   const params = new URLSearchParams();
   if (status && status !== "all") params.set("status", status);
   if (search && search.trim()) params.set("search", search.trim());
+  if (sort) params.set("sort", sort);
   const queryStr = params.toString() ? `?${params.toString()}` : "";
 
   const res = await fetch(`/api/college/memberships${queryStr}`, {
@@ -703,6 +764,18 @@ export async function getCollegeMemberships(status?: string, search?: string) {
     credentials: "include",
   });
   return parseApiResponse(res, "Failed to fetch student cohort roster.");
+}
+
+export async function getStudentFullDetails(studentId: string) {
+  const res = await fetch(`/api/college/students/${encodeURIComponent(studentId)}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to fetch student registration details.");
 }
 
 export async function approveCollegeMembership(id: string) {
@@ -730,6 +803,31 @@ export async function rejectCollegeMembership(id: string, reason?: string) {
   return parseApiResponse(res, "Failed to reject student request.");
 }
 
+export async function suspendStudentMembership(id: string, reason: string) {
+  const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}/suspend`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify({ reason }),
+  });
+  return parseApiResponse(res, "Failed to suspend student account.");
+}
+
+export async function unsuspendStudentMembership(id: string) {
+  const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}/unsuspend`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to unsuspend student account.");
+}
+
 export async function removeCollegeMembership(id: string) {
   const res = await fetch(`/api/college/memberships/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -740,6 +838,18 @@ export async function removeCollegeMembership(id: string) {
     credentials: "include",
   });
   return parseApiResponse(res, "Failed to remove student from cohort.");
+}
+
+export async function deleteStudentPermanently(studentId: string) {
+  const res = await fetch(`/api/college/students/${encodeURIComponent(studentId)}/permanent`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    credentials: "include",
+  });
+  return parseApiResponse(res, "Failed to permanently delete student account.");
 }
 
 // ----------------------------------------------------

@@ -136,11 +136,12 @@ export interface CollegeMembership {
   collegeId: string;
   invitationId?: string;
   invitationCode?: string;
-  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  status: "pending" | "active" | "rejected" | "revoked" | "removed" | "suspended";
   requestedAt: string;
   reviewedAt?: string;
   reviewedBy?: string;
   rejectionReason?: string;
+  suspensionReason?: string;
   consent: GranularConsent;
   college?: College;
   createdAt: string;
@@ -149,7 +150,7 @@ export interface CollegeMembership {
 
 export interface CollegeStudentRosterItem {
   membershipId: string;
-  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  status: "pending" | "active" | "rejected" | "revoked" | "removed" | "suspended";
   requestedAt: string;
   reviewedAt?: string;
   consent: GranularConsent;
@@ -177,6 +178,24 @@ export interface CollegeStudentRosterItem {
   communicationScore?: number | null;
   lastInterviewScore?: number | null;
   lastInterviewDate?: string | null;
+  suspensionReason?: string;
+  verificationStatus?: string;
+  createdAt?: string;
+  phone?: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string;
+  actorEmail: string;
+  actorRole: string;
+  action: "verify" | "reject" | "suspend" | "unsuspend" | "delete" | "remove";
+  targetType: "college" | "student";
+  targetId: string;
+  targetName: string;
+  reason?: string;
+  details?: Record<string, any>;
+  timestamp: string;
 }
 
 export interface SkillGapSummary {

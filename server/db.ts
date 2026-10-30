@@ -138,7 +138,8 @@ export interface CollegeMembershipDocument {
   collegeId: string;
   invitationId?: string;
   invitationCode?: string;
-  status: "pending" | "active" | "rejected" | "revoked" | "removed";
+  status: "pending" | "active" | "rejected" | "revoked" | "removed" | "suspended";
+  suspensionReason?: string;
   requestedAt: string;
   reviewedAt?: string;
   reviewedBy?: string;
@@ -146,6 +147,20 @@ export interface CollegeMembershipDocument {
   consent: GranularConsent;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AuditLogDocument {
+  id: string;
+  actorId: string;
+  actorEmail: string;
+  actorRole: string;
+  action: "verify" | "reject" | "suspend" | "unsuspend" | "delete" | "remove";
+  targetType: "college" | "student";
+  targetId: string;
+  targetName: string;
+  reason?: string;
+  details?: Record<string, any>;
+  timestamp: string;
 }
 
 export interface UserDocument {
@@ -902,10 +917,11 @@ const CollegeMembershipSchema = new Schema<CollegeMembershipDocument>(
     invitationCode: { type: String },
     status: {
       type: String,
-      enum: ["pending", "active", "rejected", "revoked", "removed"],
+      enum: ["pending", "active", "rejected", "revoked", "removed", "suspended"],
       default: "pending",
       index: true,
     },
+    suspensionReason: { type: String },
     requestedAt: { type: String, default: () => new Date().toISOString() },
     reviewedAt: { type: String },
     reviewedBy: { type: String },
@@ -934,6 +950,45 @@ export const CollegeMembershipModel: Model<CollegeMembershipDocument> =
   mongoose.model<CollegeMembershipDocument>("CollegeMembership", CollegeMembershipSchema);
 
 // ----------------------------------------------------
+// AUDIT LOG SCHEMA & MODEL
+// ----------------------------------------------------
+const AuditLogSchema = new Schema<AuditLogDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    actorId: { type: String, required: true, index: true },
+    actorEmail: { type: String, required: true },
+    actorRole: { type: String, required: true },
+    action: {
+      type: String,
+      enum: ["verify", "reject", "suspend", "unsuspend", "delete", "remove"],
+      required: true,
+      index: true,
+    },
+    targetType: {
+      type: String,
+      enum: ["college", "student"],
+      required: true,
+      index: true,
+    },
+    targetId: { type: String, required: true, index: true },
+    targetName: { type: String, required: true },
+    reason: { type: String },
+    details: { type: Schema.Types.Mixed },
+    timestamp: { type: String, default: () => new Date().toISOString(), index: true },
+  },
+  {
+    versionKey: false,
+  }
+);
+
+AuditLogSchema.index({ targetId: 1, timestamp: -1 });
+AuditLogSchema.index({ action: 1, timestamp: -1 });
+
+export const AuditLogModel: Model<AuditLogDocument> =
+  (mongoose.models.AuditLog as Model<AuditLogDocument>) ||
+  mongoose.model<AuditLogDocument>("AuditLog", AuditLogSchema);
+
+// ----------------------------------------------------
 // SANITIZE STUDENT FOR COLLEGE (Enforces Strict Data Minimization & Consent)
 // ----------------------------------------------------
 export function sanitizeStudentForCollege(
@@ -956,12 +1011,16 @@ export function sanitizeStudentForCollege(
   const record: any = {
     membershipId: membership.id,
     status: membership.status,
+    suspensionReason: membership.suspensionReason,
     requestedAt: membership.requestedAt,
     reviewedAt: membership.reviewedAt,
     rejectionReason: membership.rejectionReason,
     studentId: student.id,
     fullName: student.fullName,
     email: student.email,
+    phone: student.phone || "",
+    verificationStatus: student.verificationStatus || "verified",
+    createdAt: student.createdAt,
     profilePhoto: student.profilePhoto || "",
     consent,
   };
@@ -1625,8 +1684,8 @@ export const db = {
 
   // Colleges
   colleges: {
-    find: async (query: any): Promise<CollegeDocument[]> => {
-      const docs = await CollegeModel.find(query).sort({ createdAt: -1 }).lean().exec();
+    find: async (query: any, sortOrder: 1 | -1 = -1): Promise<CollegeDocument[]> => {
+      const docs = await CollegeModel.find(query).sort({ createdAt: sortOrder }).lean().exec();
       return docs as unknown as CollegeDocument[];
     },
     findById: async (id: string): Promise<CollegeDocument | null> => {
@@ -1661,6 +1720,121 @@ export const db = {
         { new: true }
       ).lean().exec();
       return updated as unknown as CollegeDocument | null;
+    },
+    unsuspend: async (
+      collegeId: string,
+      actor: { id: string; email: string; role: string },
+      reviewNotes?: string
+    ): Promise<CollegeDocument> => {
+      const college = await CollegeModel.findOne({ id: collegeId });
+      if (!college) {
+        throw new Error("College record not found.");
+      }
+
+      const now = new Date().toISOString();
+      const updatedCollege = await CollegeModel.findOneAndUpdate(
+        { id: collegeId },
+        {
+          $set: {
+            status: "verified",
+            verifiedAt: now,
+            verifiedBy: actor.id,
+            reviewedAt: now,
+            reviewedBy: actor.id,
+            reviewedByName: actor.email,
+            reviewNotes: typeof reviewNotes === "string" ? reviewNotes.trim() : college.reviewNotes,
+            updatedAt: now,
+          },
+          $unset: { suspensionReason: 1, rejectionReason: 1 },
+        },
+        { new: true }
+      ).lean().exec();
+
+      // Restore associated officer verification status
+      if (college.officerUserId) {
+        await UserModel.updateOne(
+          { id: college.officerUserId },
+          { $set: { verificationStatus: "verified", updatedAt: now } }
+        ).exec();
+      }
+
+      // Record audit log
+      await db.auditLogs.log({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        action: "unsuspend",
+        targetType: "college",
+        targetId: collegeId,
+        targetName: college.name,
+        details: { reviewNotes },
+      });
+
+      return updatedCollege as unknown as CollegeDocument;
+    },
+    deletePermanent: async (
+      collegeId: string,
+      actor: { id: string; email: string; role: string }
+    ): Promise<{
+      success: boolean;
+      deletedCollegeName: string;
+      deletedInvitationsCount: number;
+      deletedMembershipsCount: number;
+      dissociatedStudentsCount: number;
+    }> => {
+      const college = await CollegeModel.findOne({ id: collegeId });
+      if (!college) {
+        throw new Error("College record not found.");
+      }
+      const collegeName = college.name;
+
+      // 1. Delete all invitations for this college
+      const invResult = await CollegeInvitationModel.deleteMany({ collegeId }).exec();
+
+      // 2. Delete all memberships for this college
+      const memResult = await CollegeMembershipModel.deleteMany({ collegeId }).exec();
+
+      // 3. Reset any students whose active collegeId was this college
+      const studentsResult = await UserModel.updateMany(
+        { collegeId },
+        { $unset: { collegeId: 1 }, $set: { college: "Independent Learner", updatedAt: new Date().toISOString() } }
+      ).exec();
+
+      // 4. Update officer user: revoke role or dissociate and revoke active sessions
+      if (college.officerUserId) {
+        await UserModel.updateOne(
+          { id: college.officerUserId },
+          { $unset: { collegeId: 1 }, $set: { role: "student", verificationStatus: "verified", updatedAt: new Date().toISOString() } }
+        ).exec();
+        await SessionModel.deleteMany({ userId: college.officerUserId }).exec();
+      }
+
+      // 5. Delete the college document itself
+      await CollegeModel.deleteOne({ id: collegeId }).exec();
+
+      // 6. Record audit log
+      await db.auditLogs.log({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        action: "delete",
+        targetType: "college",
+        targetId: collegeId,
+        targetName: collegeName,
+        details: {
+          invitationsDeleted: invResult.deletedCount,
+          membershipsDeleted: memResult.deletedCount,
+          studentsDissociated: studentsResult.modifiedCount,
+        },
+      });
+
+      return {
+        success: true,
+        deletedCollegeName: collegeName,
+        deletedInvitationsCount: invResult.deletedCount,
+        deletedMembershipsCount: memResult.deletedCount,
+        dissociatedStudentsCount: studentsResult.modifiedCount,
+      };
     },
   },
 
@@ -1734,12 +1908,12 @@ export const db = {
       const docs = await CollegeMembershipModel.find({ studentId }).sort({ requestedAt: -1 }).lean().exec();
       return docs as unknown as CollegeMembershipDocument[];
     },
-    findByCollege: async (collegeId: string, status?: string): Promise<CollegeMembershipDocument[]> => {
+    findByCollege: async (collegeId: string, status?: string, sortOrder: 1 | -1 = -1): Promise<CollegeMembershipDocument[]> => {
       const query: any = { collegeId };
       if (status && status !== "all") {
         query.status = status;
       }
-      const docs = await CollegeMembershipModel.find(query).sort({ requestedAt: -1 }).lean().exec();
+      const docs = await CollegeMembershipModel.find(query).sort({ requestedAt: sortOrder }).lean().exec();
       return docs as unknown as CollegeMembershipDocument[];
     },
     update: async (id: string, updates: Partial<CollegeMembershipDocument>): Promise<CollegeMembershipDocument | null> => {
@@ -1757,6 +1931,150 @@ export const db = {
         { new: true }
       ).lean().exec();
       return updated as unknown as CollegeMembershipDocument | null;
+    },
+    suspendStudent: async (
+      membershipId: string,
+      collegeId: string,
+      reason: string,
+      actor: { id: string; email: string; role: string }
+    ): Promise<CollegeMembershipDocument> => {
+      const membership = await CollegeMembershipModel.findOne({ id: membershipId, collegeId });
+      if (!membership) {
+        throw new Error("Student membership not found for your college.");
+      }
+
+      const now = new Date().toISOString();
+      const updatedMembership = await CollegeMembershipModel.findOneAndUpdate(
+        { id: membershipId },
+        {
+          $set: {
+            status: "suspended",
+            suspensionReason: reason.trim(),
+            reviewedAt: now,
+            reviewedBy: actor.id,
+            updatedAt: now,
+          },
+        },
+        { new: true }
+      ).lean().exec();
+
+      // Suspend student user and terminate all active sessions immediately
+      await UserModel.updateOne(
+        { id: membership.studentId },
+        { $set: { verificationStatus: "suspended", updatedAt: now } }
+      ).exec();
+      await SessionModel.deleteMany({ userId: membership.studentId }).exec();
+
+      // Record audit log
+      const student = await UserModel.findOne({ id: membership.studentId });
+      await db.auditLogs.log({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        action: "suspend",
+        targetType: "student",
+        targetId: membership.studentId,
+        targetName: student?.fullName || "Student",
+        reason: reason.trim(),
+        details: { membershipId, collegeId },
+      });
+
+      return updatedMembership as unknown as CollegeMembershipDocument;
+    },
+    unsuspendStudent: async (
+      membershipId: string,
+      collegeId: string,
+      actor: { id: string; email: string; role: string }
+    ): Promise<CollegeMembershipDocument> => {
+      const membership = await CollegeMembershipModel.findOne({ id: membershipId, collegeId });
+      if (!membership) {
+        throw new Error("Student membership not found for your college.");
+      }
+
+      const now = new Date().toISOString();
+      const updatedMembership = await CollegeMembershipModel.findOneAndUpdate(
+        { id: membershipId },
+        {
+          $set: {
+            status: "active",
+            reviewedAt: now,
+            reviewedBy: actor.id,
+            updatedAt: now,
+          },
+          $unset: { suspensionReason: 1 },
+        },
+        { new: true }
+      ).lean().exec();
+
+      // Restore student verification status
+      await UserModel.updateOne(
+        { id: membership.studentId },
+        { $set: { verificationStatus: "verified", updatedAt: now } }
+      ).exec();
+
+      // Record audit log
+      const student = await UserModel.findOne({ id: membership.studentId });
+      await db.auditLogs.log({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        action: "unsuspend",
+        targetType: "student",
+        targetId: membership.studentId,
+        targetName: student?.fullName || "Student",
+        details: { membershipId, collegeId },
+      });
+
+      return updatedMembership as unknown as CollegeMembershipDocument;
+    },
+    deleteStudentPermanent: async (
+      studentId: string,
+      collegeId: string,
+      actor: { id: string; email: string; role: string }
+    ): Promise<{ success: boolean; deletedStudentName: string }> => {
+      // Confirm student belongs to this college
+      const membership = await CollegeMembershipModel.findOne({ studentId, collegeId });
+      const student = await UserModel.findOne({ id: studentId });
+
+      if (!student) {
+        throw new Error("Student account not found.");
+      }
+
+      if (!membership && student.collegeId !== collegeId) {
+        throw new Error("Unauthorized: Student does not belong to your college.");
+      }
+
+      const studentName = student.fullName;
+      const studentEmail = student.email;
+
+      // Permanently remove all student records
+      await Promise.all([
+        UserModel.deleteOne({ id: studentId }).exec(),
+        SessionModel.deleteMany({ userId: studentId }).exec(),
+        RoadmapModel.deleteMany({ userId: studentId }).exec(),
+        InterviewModel.deleteMany({ userId: studentId }).exec(),
+        ReadinessScoreModel.deleteMany({ userId: studentId }).exec(),
+        CollegeMembershipModel.deleteMany({ studentId }).exec(),
+        PasswordResetModel.deleteMany({ userId: studentId }).exec(),
+        RegistrationOtpModel.deleteMany({ email: studentEmail }).exec(),
+      ]);
+
+      // Record audit log
+      await db.auditLogs.log({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        action: "delete",
+        targetType: "student",
+        targetId: studentId,
+        targetName: studentName,
+        details: { studentEmail, collegeId },
+      });
+
+      return {
+        success: true,
+        deletedStudentName: studentName,
+      };
     },
     delete: async (id: string): Promise<void> => {
       await CollegeMembershipModel.deleteOne({ id }).exec();
@@ -2028,6 +2346,34 @@ export const db = {
         email: email.toLowerCase().trim(),
         usedAt: { $exists: false },
       }).exec();
+    },
+  },
+
+  // Audit Logs (Governance & Operational Auditing)
+  auditLogs: {
+    log: async (data: {
+      actorId: string;
+      actorEmail: string;
+      actorRole: string;
+      action: "verify" | "reject" | "suspend" | "unsuspend" | "delete" | "remove";
+      targetType: "college" | "student";
+      targetId: string;
+      targetName: string;
+      reason?: string;
+      details?: Record<string, any>;
+    }): Promise<AuditLogDocument> => {
+      const crypto = (await import("crypto")).default;
+      const entry: AuditLogDocument = {
+        id: `audit-${crypto.randomBytes(8).toString("hex")}`,
+        ...data,
+        timestamp: new Date().toISOString(),
+      };
+      const doc = await AuditLogModel.create(entry);
+      return doc.toObject() as unknown as AuditLogDocument;
+    },
+    find: async (query: any = {}, limit = 100): Promise<AuditLogDocument[]> => {
+      const docs = await AuditLogModel.find(query).sort({ timestamp: -1 }).limit(limit).lean().exec();
+      return docs as unknown as AuditLogDocument[];
     },
   },
 };

@@ -9,6 +9,10 @@ import {
   approveCollegeMembership,
   rejectCollegeMembership,
   removeCollegeMembership,
+  suspendStudentMembership,
+  unsuspendStudentMembership,
+  deleteStudentPermanently,
+  getStudentFullDetails,
   getCollegeAnalytics,
   getStudentProgressDetail,
   downloadCollegeCsvReport,
@@ -22,6 +26,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Lock,
+  Unlock,
   RefreshCw,
   LogOut,
   Mail,
@@ -49,6 +54,10 @@ import {
   Download,
   PieChart,
   TrendingUp,
+  Ban,
+  ShieldAlert,
+  ArrowUpDown,
+  History,
 } from "lucide-react";
 
 interface CollegeDashboardProps {
@@ -72,10 +81,30 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
   const [students, setStudents] = useState<CollegeStudentRosterItem[]>([]);
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterSearch, setRosterSearch] = useState("");
-  const [counts, setCounts] = useState({ all: 0, pending: 0, active: 0, rejected: 0 });
+  const [rosterStatusFilter, setRosterStatusFilter] = useState<"active" | "suspended" | "all">("active");
+  const [rosterSort, setRosterSort] = useState<"newest" | "oldest">("newest");
+  const [counts, setCounts] = useState({ all: 0, pending: 0, active: 0, suspended: 0, rejected: 0 });
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Selected student for details modal
   const [selectedStudent, setSelectedStudent] = useState<CollegeStudentRosterItem | null>(null);
+  const [fullDetailsStudent, setFullDetailsStudent] = useState<any | null>(null);
+  const [loadingFullDetails, setLoadingFullDetails] = useState(false);
+
+  // Suspend student modal
+  const [suspendingStudent, setSuspendingStudent] = useState<CollegeStudentRosterItem | null>(null);
+  const [suspensionReasonInput, setSuspensionReasonInput] = useState("");
+  const [submittingSuspend, setSubmittingSuspend] = useState(false);
+
+  // Permanently delete student modal
+  const [deletingStudent, setDeletingStudent] = useState<CollegeStudentRosterItem | null>(null);
+  const [deleteStudentConfirmInput, setDeleteStudentConfirmInput] = useState("");
+  const [submittingDelete, setSubmittingDelete] = useState(false);
+
+  // Remove student from cohort modal (non-destructive)
+  const [removingStudent, setRemovingStudent] = useState<CollegeStudentRosterItem | null>(null);
+  const [submittingRemove, setSubmittingRemove] = useState(false);
 
   // Invitations state
   const [invitations, setInvitations] = useState<CollegeInvitation[]>([]);
@@ -127,7 +156,7 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
   const fetchRoster = async () => {
     setRosterLoading(true);
     try {
-      const res = await getCollegeMemberships("all", rosterSearch);
+      const res = await getCollegeMemberships("all", rosterSearch, rosterSort);
       if (res && res.students) {
         setStudents(res.students);
         if (res.counts) setCounts(res.counts);
@@ -290,23 +319,104 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
     }
   };
 
-  // Handle remove student
-  const handleRemoveStudent = async (membershipId: string, studentName: string) => {
-    if (!window.confirm(`Remove ${studentName} from this college cohort? Their student account will remain independent, but will be disconnected from your placement portal.`)) {
+  // Handle remove student (non-destructive dissociation)
+  const handleConfirmRemoveStudent = async () => {
+    if (!removingStudent) return;
+    setSubmittingRemove(true);
+    setActionError(null);
+    try {
+      await removeCollegeMembership(removingStudent.membershipId);
+      setActionNotice(`Student "${removingStudent.fullName}" was removed from the college cohort.`);
+      setRemovingStudent(null);
+      await fetchRoster();
+      setTimeout(() => setActionNotice(null), 6000);
+    } catch (err: any) {
+      setActionError("Failed to remove student: " + (err.message || "Unknown error"));
+    } finally {
+      setSubmittingRemove(false);
+    }
+  };
+
+  // Handle suspend student account
+  const handleConfirmSuspendStudent = async () => {
+    if (!suspendingStudent) return;
+    if (!suspensionReasonInput.trim()) {
+      setActionError("A reason for suspension is required.");
       return;
     }
-    setActionLoadingId(membershipId);
+    setActionError(null);
+    setSubmittingSuspend(true);
     try {
-      await removeCollegeMembership(membershipId);
+      await suspendStudentMembership(suspendingStudent.membershipId, suspensionReasonInput.trim());
+      setActionNotice(`Student ${suspendingStudent.fullName} has been suspended. Active sessions revoked.`);
+      setSuspendingStudent(null);
+      setSuspensionReasonInput("");
       await fetchRoster();
+      setTimeout(() => setActionNotice(null), 6000);
     } catch (err: any) {
-      alert("Failed to remove student: " + err.message);
+      setActionError(err.message || "Failed to suspend student.");
+    } finally {
+      setSubmittingSuspend(false);
+    }
+  };
+
+  // Handle unsuspend student account
+  const handleUnsuspendStudent = async (membershipId: string, studentName: string) => {
+    setActionLoadingId(membershipId);
+    setActionError(null);
+    try {
+      await unsuspendStudentMembership(membershipId);
+      setActionNotice(`Student ${studentName} account access has been restored.`);
+      await fetchRoster();
+      setTimeout(() => setActionNotice(null), 6000);
+    } catch (err: any) {
+      setActionError(err.message || "Failed to unsuspend student.");
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  const activeRosterStudents = students.filter((s) => s.status === "active");
+  // Handle permanently delete student account (destructive)
+  const handleConfirmDeleteStudent = async () => {
+    if (!deletingStudent) return;
+    if (deleteStudentConfirmInput.trim() !== deletingStudent.fullName.trim()) {
+      setActionError(`Confirmation mismatch. Please type exact student name: "${deletingStudent.fullName}".`);
+      return;
+    }
+    setActionError(null);
+    setSubmittingDelete(true);
+    try {
+      await deleteStudentPermanently(deletingStudent.studentId);
+      setActionNotice(`Permanently deleted student account '${deletingStudent.fullName}' and associated records.`);
+      setDeletingStudent(null);
+      setDeleteStudentConfirmInput("");
+      await fetchRoster();
+      setTimeout(() => setActionNotice(null), 6000);
+    } catch (err: any) {
+      setActionError(err.message || "Failed to delete student account.");
+    } finally {
+      setSubmittingDelete(false);
+    }
+  };
+
+  // Handle open student full details
+  const handleOpenStudentFullDetails = async (item: CollegeStudentRosterItem) => {
+    setSelectedStudent(item);
+    setLoadingFullDetails(true);
+    try {
+      const data = await getStudentFullDetails(item.studentId);
+      setFullDetailsStudent(data);
+    } catch (err: any) {
+      console.warn("Failed to load student full details:", err);
+    } finally {
+      setLoadingFullDetails(false);
+    }
+  };
+
+  const displayedRosterStudents = students.filter((s) => {
+    if (rosterStatusFilter === "all") return s.status !== "pending";
+    return s.status === rosterStatusFilter;
+  });
   const pendingRequests = students.filter((s) => s.status === "pending");
 
   return (
@@ -850,30 +960,112 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
         {/* TAB 3: STUDENT COHORT ROSTER */}
         {activeTab === "roster" && status === "verified" && (
           <div className="space-y-4">
-            {/* Search & Actions Bar */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#16171A] p-4 rounded-xl border border-[#26282E]">
-              <div className="relative flex-1 max-w-md">
+            {/* Action notices */}
+            {actionNotice && (
+              <div className="p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-xs text-emerald-300 flex items-center justify-between animate-in fade-in">
+                <span>{actionNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setActionNotice(null)}
+                  className="text-emerald-400 hover:text-white font-bold ml-2 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            {actionError && (
+              <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs text-rose-300 flex items-center justify-between animate-in fade-in">
+                <span>{actionError}</span>
+                <button
+                  type="button"
+                  onClick={() => setActionError(null)}
+                  className="text-rose-400 hover:text-white font-bold ml-2 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Filter Tabs & Search & Sort Bar */}
+            <div className="bg-[#16171A] p-4 rounded-xl border border-[#26282E] space-y-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                {/* Status Filter Tabs */}
+                <div className="flex items-center gap-1.5 bg-[#1B1D22] p-1 rounded-xl border border-[#2E313A]">
+                  <button
+                    type="button"
+                    onClick={() => setRosterStatusFilter("active")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      rosterStatusFilter === "active"
+                        ? "bg-[#FF6B00] text-white shadow-sm"
+                        : "text-[#A1A1AA] hover:text-white"
+                    }`}
+                  >
+                    Active ({counts.active})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRosterStatusFilter("suspended")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      rosterStatusFilter === "suspended"
+                        ? "bg-rose-900 text-rose-200 border border-rose-700 shadow-sm"
+                        : "text-[#A1A1AA] hover:text-white"
+                    }`}
+                  >
+                    Suspended ({counts.suspended || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRosterStatusFilter("all")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      rosterStatusFilter === "all"
+                        ? "bg-[#2A2D35] text-white shadow-sm"
+                        : "text-[#A1A1AA] hover:text-white"
+                    }`}
+                  >
+                    All ({counts.active + (counts.suspended || 0)})
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Sort Order */}
+                  <div className="flex items-center gap-1.5 bg-[#1B1D22] border border-[#2E313A] rounded-xl px-2.5 py-1 text-xs text-[#A1A1AA]">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-[#FF6B00]" />
+                    <select
+                      value={rosterSort}
+                      onChange={(e) => {
+                        setRosterSort(e.target.value as "newest" | "oldest");
+                        fetchRoster();
+                      }}
+                      className="bg-transparent text-white font-medium focus:outline-none cursor-pointer py-1"
+                    >
+                      <option value="newest" className="bg-[#1B1D22] text-white">Newest First</option>
+                      <option value="oldest" className="bg-[#1B1D22] text-white">Oldest First</option>
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={fetchRoster}
+                    disabled={rosterLoading}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#22242A] hover:bg-[#2C2E35] border border-[#32353E] text-xs font-semibold text-white transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${rosterLoading ? "animate-spin" : ""}`} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search input */}
+              <div className="relative w-full">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#71717A]" />
                 <input
                   type="text"
                   value={rosterSearch}
                   onChange={(e) => setRosterSearch(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && fetchRoster()}
-                  placeholder="Search students by name, roll no, branch..."
+                  placeholder="Search students by name, email, roll number, or branch..."
                   className="w-full bg-[#1B1D22] border border-[#2E313A] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
                 />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={fetchRoster}
-                  disabled={rosterLoading}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#22242A] hover:bg-[#2C2E35] border border-[#32353E] text-xs font-semibold text-white transition-colors"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${rosterLoading ? "animate-spin" : ""}`} />
-                  <span>Refresh</span>
-                </button>
               </div>
             </div>
 
@@ -883,39 +1075,45 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
                 <Loader2 className="h-6 w-6 animate-spin mx-auto text-[#FF6B00]" />
                 <p className="text-xs">Loading linked students cohort...</p>
               </div>
-            ) : activeRosterStudents.length === 0 ? (
+            ) : displayedRosterStudents.length === 0 ? (
               <div className="p-12 rounded-xl bg-[#16171A] border border-[#26282E] text-center space-y-3">
                 <Users className="h-10 w-10 text-[#71717A] mx-auto" />
-                <h3 className="font-bold text-white text-sm">No Active Students Yet</h3>
+                <h3 className="font-bold text-white text-sm">No Students Found</h3>
                 <p className="text-xs text-[#A1A1AA] max-w-md mx-auto leading-relaxed">
-                  Generate an invitation code from the <strong>Invitation Codes</strong> tab and share it with your students to begin tracking campus readiness.
+                  {rosterSearch
+                    ? "No students match your search criteria. Try a different query."
+                    : rosterStatusFilter === "suspended"
+                    ? "There are currently no suspended students in your college cohort."
+                    : "Generate an invitation code from the Invitation Codes tab and share it with your students to begin tracking campus readiness."}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("invitations")}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FF6B00] text-xs font-bold text-white hover:bg-[#e05e00] shadow-md"
-                >
-                  <Ticket className="h-4 w-4" />
-                  <span>Create Invitation Code</span>
-                </button>
+                {rosterStatusFilter === "active" && !rosterSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("invitations")}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FF6B00] text-xs font-bold text-white hover:bg-[#e05e00] shadow-md cursor-pointer"
+                  >
+                    <Ticket className="h-4 w-4" />
+                    <span>Create Invitation Code</span>
+                  </button>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-[#26282E] bg-[#16171A]">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-[#26282E] bg-[#1A1C20] text-[#71717A] uppercase text-[10px] tracking-wider font-bold">
-                      <th className="py-3 px-4">Student</th>
+                      <th className="py-3 px-4">Student & Status</th>
+                      <th className="py-3 px-4">Registration & Affiliation</th>
                       <th className="py-3 px-4">Academics</th>
-                      <th className="py-3 px-4">Readiness & Interviews</th>
-                      <th className="py-3 px-4">Roadmap Progress</th>
+                      <th className="py-3 px-4">Readiness & Scores</th>
                       <th className="py-3 px-4">Sharing Consent</th>
                       <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#26282E]">
-                    {activeRosterStudents.map((item) => (
+                    {displayedRosterStudents.map((item) => (
                       <tr key={item.membershipId} className="hover:bg-[#1C1E23] transition-colors">
-                        {/* Student Name */}
+                        {/* Student Name & Status */}
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-2.5">
                             <div className="h-8 w-8 rounded-full bg-[#2A2D35] flex items-center justify-center font-bold text-white text-xs shrink-0">
@@ -926,9 +1124,35 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
                               )}
                             </div>
                             <div>
-                              <span className="font-bold text-white block">{item.fullName}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white block">{item.fullName}</span>
+                                {item.status === "suspended" ? (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-950 text-rose-400 border border-rose-800">
+                                    Suspended
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                    Active
+                                  </span>
+                                )}
+                              </div>
                               <span className="text-[11px] text-[#71717A] font-mono">{item.email}</span>
+                              {item.phone && <span className="text-[10px] text-[#A1A1AA] block">{item.phone}</span>}
                             </div>
+                          </div>
+                        </td>
+
+                        {/* Registration & Affiliation Dates */}
+                        <td className="py-3.5 px-4">
+                          <div className="space-y-0.5">
+                            <span className="text-[11px] text-[#E4E4E7] block">
+                              Reg: {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "N/A"}
+                            </span>
+                            {item.approvedAt && (
+                              <span className="text-[10px] text-[#71717A] block">
+                                Joined: {new Date(item.approvedAt).toLocaleDateString()}
+                              </span>
+                            )}
                           </div>
                         </td>
 
@@ -980,28 +1204,6 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
                           )}
                         </td>
 
-                        {/* Roadmap Progress */}
-                        <td className="py-3.5 px-4">
-                          {item.consent.shareSkillRoadmap ? (
-                            <div className="space-y-1 max-w-[120px]">
-                              <div className="flex justify-between text-[10px] text-[#A1A1AA]">
-                                <span>{item.roadmapOverallProgress ?? 0}%</span>
-                                <span>{item.completedTasks ?? 0}/{item.totalTasks ?? 0}</span>
-                              </div>
-                              <div className="h-1.5 w-full bg-[#26282E] rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-[#FF6B00] rounded-full"
-                                  style={{ width: `${item.roadmapOverallProgress ?? 0}%` }}
-                                />
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] text-[#71717A] italic flex items-center gap-1">
-                              <Lock className="h-3 w-3" /> Restricted by student
-                            </span>
-                          )}
-                        </td>
-
                         {/* Consent Badges */}
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-1 flex-wrap">
@@ -1040,24 +1242,65 @@ export const CollegeDashboard: React.FC<CollegeDashboardProps> = ({
 
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
                             <button
                               type="button"
-                              onClick={() => setSelectedStudent(item)}
-                              className="px-2.5 py-1.5 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] border border-[#32353E] text-white font-semibold text-[11px] transition-colors"
-                              title="View student snapshot"
+                              onClick={() => handleOpenStudentFullDetails(item)}
+                              className="px-2.5 py-1 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] border border-[#32353E] text-white font-semibold text-[11px] transition-colors cursor-pointer"
+                              title="View full registration details and audit history"
                             >
-                              <Eye className="h-3.5 w-3.5 inline mr-1" />
-                              View
+                              <Eye className="h-3 w-3 inline mr-1 text-[#FF6B00]" />
+                              Details
                             </button>
+
+                            {item.status === "suspended" ? (
+                              <button
+                                type="button"
+                                onClick={() => handleUnsuspendStudent(item.membershipId, item.fullName)}
+                                disabled={actionLoadingId === item.membershipId}
+                                className="px-2 py-1 rounded-lg bg-emerald-950/60 hover:bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                title="Unsuspend student account"
+                              >
+                                <Unlock className="h-3 w-3" />
+                                Unsuspend
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSuspendingStudent(item);
+                                  setSuspensionReasonInput("");
+                                }}
+                                disabled={actionLoadingId === item.membershipId}
+                                className="px-2 py-1 rounded-lg bg-amber-950/40 hover:bg-amber-950 text-amber-300 border border-amber-800/60 text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                title="Suspend student account and revoke active sessions"
+                              >
+                                <Ban className="h-3 w-3" />
+                                Suspend
+                              </button>
+                            )}
+
                             <button
                               type="button"
-                              onClick={() => handleRemoveStudent(item.membershipId, item.fullName)}
+                              onClick={() => setRemovingStudent(item)}
                               disabled={actionLoadingId === item.membershipId}
-                              className="p-1.5 rounded-lg hover:bg-rose-950/50 text-[#71717A] hover:text-rose-400 transition-colors"
-                              title="Remove from cohort"
+                              className="p-1.5 rounded-lg hover:bg-[#2A2D35] text-[#A1A1AA] hover:text-white transition-colors cursor-pointer"
+                              title="Remove from college cohort (non-destructive)"
                             >
                               <Unlink className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingStudent(item);
+                                setDeleteStudentConfirmInput("");
+                              }}
+                              disabled={actionLoadingId === item.membershipId}
+                              className="p-1.5 rounded-lg hover:bg-rose-950/60 text-rose-500 hover:text-rose-300 transition-colors cursor-pointer"
+                              title="Permanently delete student account and all records"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           </div>
                         </td>

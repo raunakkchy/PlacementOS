@@ -323,6 +323,14 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
       res.status(401).json({ error: "Unauthorized. Please log in." });
       return;
     }
+    if (user.verificationStatus === "suspended") {
+      res.status(403).json({
+        error: "Your account has been suspended by the administrator. Please contact your college or platform administrator.",
+        status: "suspended",
+        code: "ACCOUNT_SUSPENDED",
+      });
+      return;
+    }
     (req as any).user = user;
     next();
   } catch (err: any) {
@@ -846,10 +854,10 @@ app.get(["/api/college/status", "/api/college/verification-status"], requireAuth
 // ADMINISTRATIVE COLLEGE VERIFICATION ENDPOINTS
 // ----------------------------------------------------
 
-// 1. List Colleges with status filter and search query
+// 1. List Colleges with status filter, search query, date filter, and date sorting
 app.get("/api/admin/colleges", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
   try {
-    const { status, search } = req.query;
+    const { status, search, sort, startDate, endDate } = req.query;
     const query: any = {};
 
     if (status && typeof status === "string" && status !== "all") {
@@ -872,7 +880,21 @@ app.get("/api/admin/colleges", requireAuth, requireRole("admin"), async (req: Re
       ];
     }
 
-    const colleges = await db.colleges.find(query);
+    if (startDate || endDate) {
+      const dateFilter: any = {};
+      if (startDate && typeof startDate === "string") {
+        dateFilter.$gte = new Date(startDate).toISOString();
+      }
+      if (endDate && typeof endDate === "string") {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        dateFilter.$lte = end.toISOString();
+      }
+      query.createdAt = dateFilter;
+    }
+
+    const sortOrder: 1 | -1 = sort === "oldest" ? 1 : -1;
+    const colleges = await db.colleges.find(query, sortOrder);
     const sanitized = colleges.map((c) => sanitizeCollege(c, true));
 
     // Calculate status counts for admin summary tabs
@@ -910,10 +932,14 @@ app.get("/api/admin/colleges/:id", requireAuth, requireRole("admin"), async (req
     // Also fetch associated officer details
     const officer = await db.users.findById(college.officerUserId);
 
+    // Fetch audit history for this college
+    const auditLogs = await db.auditLogs.find({ targetId: id, targetType: "college" }, 20);
+
     res.json({
       success: true,
       college: sanitizeCollege(college, true),
       officer: officer ? sanitizeUser(officer) : null,
+      auditLogs,
     });
   } catch (err: any) {
     console.error("Admin get college error:", err);
@@ -967,6 +993,19 @@ app.patch("/api/admin/colleges/:id/verify", requireAuth, requireRole("admin"), a
       });
     }
 
+    // Log to AuditLogs
+    await db.auditLogs.log({
+      actorId: adminUser.id,
+      actorEmail: adminUser.email,
+      actorRole: adminUser.role,
+      action: "verify",
+      targetType: "college",
+      targetId: id,
+      targetName: college.name,
+      reason: verificationMethod.trim(),
+      details: { reviewNotes },
+    });
+
     console.log(`[Admin Audit] College '${college.name}' (${college.id}) VERIFIED by admin ${adminUser.email} using method: '${verificationMethod}'.`);
 
     res.json({
@@ -1017,6 +1056,19 @@ app.patch("/api/admin/colleges/:id/reject", requireAuth, requireRole("admin"), a
       });
     }
 
+    // Log to AuditLogs
+    await db.auditLogs.log({
+      actorId: adminUser.id,
+      actorEmail: adminUser.email,
+      actorRole: adminUser.role,
+      action: "reject",
+      targetType: "college",
+      targetId: id,
+      targetName: college.name,
+      reason: rejectionReason.trim(),
+      details: { reviewNotes },
+    });
+
     console.log(`[Admin Audit] College '${college.name}' (${college.id}) REJECTED by admin ${adminUser.email}. Reason: '${rejectionReason}'.`);
 
     res.json({
@@ -1065,7 +1117,22 @@ app.patch("/api/admin/colleges/:id/suspend", requireAuth, requireRole("admin"), 
       await db.users.update(college.officerUserId, {
         verificationStatus: "suspended",
       });
+      // Revoke officer's active sessions immediately
+      await db.sessions.deleteMany?.(college.officerUserId) || await (await import("./server/db.js")).SessionModel?.deleteMany({ userId: college.officerUserId });
     }
+
+    // Log to AuditLogs
+    await db.auditLogs.log({
+      actorId: adminUser.id,
+      actorEmail: adminUser.email,
+      actorRole: adminUser.role,
+      action: "suspend",
+      targetType: "college",
+      targetId: id,
+      targetName: college.name,
+      reason: suspensionReason.trim(),
+      details: { reviewNotes },
+    });
 
     console.log(`[Admin Audit] College '${college.name}' (${college.id}) SUSPENDED by admin ${adminUser.email}. Reason: '${suspensionReason}'.`);
 
@@ -1077,6 +1144,70 @@ app.patch("/api/admin/colleges/:id/suspend", requireAuth, requireRole("admin"), 
   } catch (err: any) {
     console.error("Admin suspend college error:", err);
     res.status(500).json({ error: "Failed to suspend college: " + err.message });
+  }
+});
+
+// 6. Unsuspend College (Restore access)
+app.patch("/api/admin/colleges/:id/unsuspend", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { id } = req.params;
+    const { reviewNotes } = req.body || {};
+
+    const updated = await db.colleges.unsuspend(
+      id,
+      { id: adminUser.id, email: adminUser.email, role: adminUser.role },
+      reviewNotes
+    );
+
+    res.json({
+      success: true,
+      message: `College '${updated.name}' portal access has been restored.`,
+      college: sanitizeCollege(updated, true),
+    });
+  } catch (err: any) {
+    console.error("Admin unsuspend college error:", err);
+    res.status(err.message.includes("not found") ? 404 : 500).json({ error: err.message });
+  }
+});
+
+// 7. Permanently Delete College (with cascade deletion)
+app.delete("/api/admin/colleges/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const adminUser = (req as any).user as UserDocument;
+    const { id } = req.params;
+
+    const result = await db.colleges.deletePermanent(id, {
+      id: adminUser.id,
+      email: adminUser.email,
+      role: adminUser.role,
+    });
+
+    res.json({
+      success: true,
+      message: `College '${result.deletedCollegeName}' and all associated records have been permanently deleted.`,
+      details: result,
+    });
+  } catch (err: any) {
+    console.error("Admin delete college error:", err);
+    res.status(err.message.includes("not found") ? 404 : 500).json({ error: err.message });
+  }
+});
+
+// 8. Super Admin Audit Logs
+app.get("/api/admin/audit-logs", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  try {
+    const { targetType, targetId, action, limit } = req.query;
+    const query: any = {};
+    if (targetType) query.targetType = targetType;
+    if (targetId) query.targetId = targetId;
+    if (action) query.action = action;
+    const max = limit ? Math.min(Number(limit), 200) : 100;
+    const logs = await db.auditLogs.find(query, max);
+    res.json({ success: true, logs });
+  } catch (err: any) {
+    console.error("Admin get audit logs error:", err);
+    res.status(500).json({ error: "Failed to fetch audit logs: " + err.message });
   }
 });
 
@@ -1573,20 +1704,19 @@ app.delete("/api/student/college-membership", requireAuth, async (req: Request, 
 app.get("/api/college/memberships", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
   try {
     const college = (req as any).college as CollegeDocument;
-    const { status, search } = req.query;
+    const { status, search, sort } = req.query;
 
     const allMemberships = await db.memberships.findByCollege(college.id);
     const counts = {
       all: allMemberships.length,
       pending: allMemberships.filter((m) => m.status === "pending").length,
       active: allMemberships.filter((m) => m.status === "active").length,
+      suspended: allMemberships.filter((m) => m.status === "suspended").length,
       rejected: allMemberships.filter((m) => m.status === "rejected").length,
     };
 
-    let filtered = allMemberships;
-    if (status && typeof status === "string" && status !== "all") {
-      filtered = filtered.filter((m) => m.status === status);
-    }
+    const sortOrder: 1 | -1 = sort === "oldest" ? 1 : -1;
+    let filtered = await db.memberships.findByCollege(college.id, typeof status === "string" ? status : undefined, sortOrder);
 
     // Resolve student records and apply privacy filters
     const sanitizedStudents = [];
@@ -1638,6 +1768,58 @@ app.get("/api/college/memberships", requireAuth, requireVerifiedCollege, async (
   }
 });
 
+// 4i-2. Officer: Get Single Student Full Registration & Academic Details
+app.get("/api/college/students/:studentId", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const college = (req as any).college as CollegeDocument;
+    const { studentId } = req.params;
+
+    const membership = await db.memberships.findByStudentAndCollege(studentId, college.id);
+    const student = await db.users.findById(studentId);
+
+    if (!student || (!membership && student.collegeId !== college.id)) {
+      res.status(404).json({ error: "Student not found in your college roster." });
+      return;
+    }
+
+    let score = null;
+    let roadmap = null;
+    let interview = null;
+
+    if (membership?.consent?.shareInterviewScores) {
+      score = await db.readinessScores.findByUser(student.id);
+      const interviews = await db.interviews.findByUser(student.id);
+      interview = interviews.length > 0 ? interviews[0] : null;
+    }
+
+    if (membership?.consent?.shareSkillRoadmap) {
+      const roadmaps = await db.roadmaps.findByUser(student.id);
+      roadmap = roadmaps.length > 0 ? roadmaps[0] : null;
+    }
+
+    const sanitized = sanitizeStudentForCollege(student, membership || ({} as any), score, roadmap, interview);
+
+    // Also include audit history for this student
+    const auditLogs = await db.auditLogs.find({ targetId: student.id, targetType: "student" }, 20);
+
+    res.json({
+      success: true,
+      student: {
+        ...sanitized,
+        rawPhone: student.phone,
+        verificationStatus: student.verificationStatus,
+        createdAt: student.createdAt,
+        updatedAt: student.updatedAt,
+        membership,
+      },
+      auditLogs,
+    });
+  } catch (err: any) {
+    console.error("Get student details error:", err);
+    res.status(500).json({ error: "Failed to retrieve student details: " + err.message });
+  }
+});
+
 // 4j. Officer: Approve Student Affiliation Request
 app.patch("/api/college/memberships/:id/approve", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
   try {
@@ -1656,6 +1838,18 @@ app.patch("/api/college/memberships/:id/approve", requireAuth, requireVerifiedCo
       reviewedAt: new Date().toISOString(),
       reviewedBy: officer.id,
       rejectionReason: undefined,
+    });
+
+    const student = await db.users.findById(membership.studentId);
+    await db.auditLogs.log({
+      actorId: officer.id,
+      actorEmail: officer.email,
+      actorRole: officer.role,
+      action: "verify",
+      targetType: "student",
+      targetId: membership.studentId,
+      targetName: student?.fullName || "Student",
+      details: { membershipId: id, collegeId: college.id },
     });
 
     console.log(`[Phase 4 Audit] Officer ${officer.email} APPROVED student membership ${id} for college ${college.name}`);
@@ -1685,11 +1879,25 @@ app.patch("/api/college/memberships/:id/reject", requireAuth, requireVerifiedCol
       return;
     }
 
+    const rejectionReason = typeof reason === "string" && reason.trim() ? reason.trim() : "Declined by placement cell";
     const updated = await db.memberships.update(id, {
       status: "rejected",
-      rejectionReason: typeof reason === "string" && reason.trim() ? reason.trim() : "Declined by placement cell",
+      rejectionReason,
       reviewedAt: new Date().toISOString(),
       reviewedBy: officer.id,
+    });
+
+    const student = await db.users.findById(membership.studentId);
+    await db.auditLogs.log({
+      actorId: officer.id,
+      actorEmail: officer.email,
+      actorRole: officer.role,
+      action: "reject",
+      targetType: "student",
+      targetId: membership.studentId,
+      targetName: student?.fullName || "Student",
+      reason: rejectionReason,
+      details: { membershipId: id, collegeId: college.id },
     });
 
     console.log(`[Phase 4 Audit] Officer ${officer.email} REJECTED student membership ${id} for college ${college.name}. Reason: ${reason}`);
@@ -1705,7 +1913,62 @@ app.patch("/api/college/memberships/:id/reject", requireAuth, requireVerifiedCol
   }
 });
 
-// 4l. Officer: Remove Student from College Cohort
+// 4l. Officer: Suspend Student Account
+app.patch("/api/college/memberships/:id/suspend", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      res.status(400).json({ error: "A justification for suspension is mandatory." });
+      return;
+    }
+
+    const updated = await db.memberships.suspendStudent(
+      id,
+      college.id,
+      reason,
+      { id: officer.id, email: officer.email, role: officer.role }
+    );
+
+    res.json({
+      success: true,
+      message: "Student account suspended successfully. Active sessions revoked.",
+      membership: updated,
+    });
+  } catch (err: any) {
+    console.error("Suspend student error:", err);
+    res.status(err.message.includes("not found") ? 404 : 500).json({ error: err.message });
+  }
+});
+
+// 4m. Officer: Unsuspend Student Account (Restore Access)
+app.patch("/api/college/memberships/:id/unsuspend", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { id } = req.params;
+
+    const updated = await db.memberships.unsuspendStudent(
+      id,
+      college.id,
+      { id: officer.id, email: officer.email, role: officer.role }
+    );
+
+    res.json({
+      success: true,
+      message: "Student account unsuspended successfully.",
+      membership: updated,
+    });
+  } catch (err: any) {
+    console.error("Unsuspend student error:", err);
+    res.status(err.message.includes("not found") ? 404 : 500).json({ error: err.message });
+  }
+});
+
+// 4n. Officer: Remove Student from College Cohort (Non-destructive)
 app.delete("/api/college/memberships/:id", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
   try {
     const officer = (req as any).user as UserDocument;
@@ -1723,6 +1986,19 @@ app.delete("/api/college/memberships/:id", requireAuth, requireVerifiedCollege, 
       rejectionReason: "Removed from cohort by placement cell officer.",
     });
 
+    const student = await db.users.findById(membership.studentId);
+    await db.auditLogs.log({
+      actorId: officer.id,
+      actorEmail: officer.email,
+      actorRole: officer.role,
+      action: "remove",
+      targetType: "student",
+      targetId: membership.studentId,
+      targetName: student?.fullName || "Student",
+      reason: "Removed from cohort by placement cell officer.",
+      details: { membershipId: id, collegeId: college.id },
+    });
+
     console.log(`[Phase 4 Audit] Officer ${officer.email} REMOVED student membership ${id} from college ${college.name}`);
 
     res.json({
@@ -1732,6 +2008,29 @@ app.delete("/api/college/memberships/:id", requireAuth, requireVerifiedCollege, 
   } catch (err: any) {
     console.error("Remove student membership error:", err);
     res.status(500).json({ error: "Failed to remove student from cohort: " + err.message });
+  }
+});
+
+// 4o. Officer: Permanently Delete Student Account (Destructive with cascade cleanup)
+app.delete("/api/college/students/:studentId/permanent", requireAuth, requireVerifiedCollege, async (req: Request, res: Response) => {
+  try {
+    const officer = (req as any).user as UserDocument;
+    const college = (req as any).college as CollegeDocument;
+    const { studentId } = req.params;
+
+    const result = await db.memberships.deleteStudentPermanent(
+      studentId,
+      college.id,
+      { id: officer.id, email: officer.email, role: officer.role }
+    );
+
+    res.json({
+      success: true,
+      message: `Student account '${result.deletedStudentName}' and all associated records have been permanently deleted.`,
+    });
+  } catch (err: any) {
+    console.error("Permanent delete student error:", err);
+    res.status(err.message.includes("Unauthorized") ? 403 : err.message.includes("not found") ? 404 : 500).json({ error: err.message });
   }
 });
 
@@ -2211,6 +2510,15 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
           }
         }
       }
+    }
+
+    if (user.verificationStatus === "suspended") {
+      res.status(403).json({
+        error: "Your account has been suspended by the college or platform administrator. Access is blocked.",
+        status: "suspended",
+        code: "ACCOUNT_SUSPENDED",
+      });
+      return;
     }
 
     // Create session token

@@ -2,9 +2,12 @@ import React, { useState, useEffect } from "react";
 import { User, College } from "../types";
 import {
   getAdminColleges,
+  getAdminCollege,
   verifyCollege,
   rejectCollege,
   suspendCollege,
+  unsuspendCollege,
+  deleteCollegePermanently,
   updateAdminCredentials,
   AdminCollegesResponse,
 } from "../services/auth";
@@ -32,7 +35,12 @@ import {
   X,
   Loader2,
   Lock,
+  Unlock,
   KeyRound,
+  Trash2,
+  Calendar,
+  ArrowUpDown,
+  History,
 } from "lucide-react";
 
 interface AdminCollegesProps {
@@ -66,17 +74,23 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
-  // Filters & Search
+  // Filters, Date Range & Sorting
   const [statusFilter, setStatusFilter] = useState<string>("pending");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
 
   // Modal states
   const [selectedCollege, setSelectedCollege] = useState<College | null>(null);
-  const [actionType, setActionType] = useState<"verify" | "reject" | "suspend" | "details" | null>(null);
+  const [fullCollegeData, setFullCollegeData] = useState<{ college: College; officer: User | null; auditLogs?: any[] } | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [actionType, setActionType] = useState<"verify" | "reject" | "suspend" | "unsuspend" | "delete" | "details" | null>(null);
   const [verificationMethod, setVerificationMethod] = useState(VERIFICATION_METHODS[0]);
   const [customMethod, setCustomMethod] = useState("");
   const [reasonInput, setReasonInput] = useState("");
   const [reviewNotesInput, setReviewNotesInput] = useState("");
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [submittingAction, setSubmittingAction] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -97,6 +111,9 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
       const res: AdminCollegesResponse = await getAdminColleges({
         status: statusFilter,
         search: searchQuery.trim() || undefined,
+        sort: sortOrder,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
       });
       if (res && res.colleges) {
         setColleges(res.colleges);
@@ -113,30 +130,65 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
 
   useEffect(() => {
     fetchColleges();
-  }, [statusFilter]);
+  }, [statusFilter, sortOrder]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     fetchColleges(true);
   };
 
-  const openActionModal = (
+  const handleApplyDateFilter = () => {
+    fetchColleges(true);
+  };
+
+  const handleClearDateFilter = () => {
+    setStartDate("");
+    setEndDate("");
+    setError(null);
+    getAdminColleges({
+      status: statusFilter,
+      search: searchQuery.trim() || undefined,
+      sort: sortOrder,
+    }).then((res) => {
+      if (res && res.colleges) {
+        setColleges(res.colleges);
+        setCounts(res.counts);
+      }
+    });
+  };
+
+  const openActionModal = async (
     college: College,
-    type: "verify" | "reject" | "suspend" | "details"
+    type: "verify" | "reject" | "suspend" | "unsuspend" | "delete" | "details"
   ) => {
     setSelectedCollege(college);
     setActionType(type);
     setActionError(null);
     setReasonInput("");
     setReviewNotesInput(college.reviewNotes || "");
+    setDeleteConfirmInput("");
     setVerificationMethod(VERIFICATION_METHODS[0]);
     setCustomMethod("");
+
+    if (type === "details") {
+      setLoadingDetails(true);
+      try {
+        const fullData = await getAdminCollege(college.id);
+        setFullCollegeData(fullData);
+      } catch (err: any) {
+        console.error("Error fetching full details:", err);
+      } finally {
+        setLoadingDetails(false);
+      }
+    }
   };
 
   const closeActionModal = () => {
     setSelectedCollege(null);
+    setFullCollegeData(null);
     setActionType(null);
     setActionError(null);
+    setDeleteConfirmInput("");
   };
 
   const handleConfirmVerify = async () => {
@@ -220,6 +272,45 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
       setTimeout(() => setSuccessNotice(null), 6000);
     } catch (err: any) {
       setActionError(err.message || "Failed to suspend college.");
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  const handleConfirmUnsuspend = async () => {
+    if (!selectedCollege) return;
+    setActionError(null);
+    setSubmittingAction(true);
+    try {
+      await unsuspendCollege(selectedCollege.id, reviewNotesInput.trim() || undefined);
+      setSuccessNotice(`Successfully unsuspended and restored portal access for '${selectedCollege.name}'.`);
+      closeActionModal();
+      fetchColleges(true);
+      setTimeout(() => setSuccessNotice(null), 6000);
+    } catch (err: any) {
+      setActionError(err.message || "Failed to unsuspend college.");
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedCollege) return;
+    if (deleteConfirmInput.trim() !== selectedCollege.name.trim()) {
+      setActionError(`Confirmation mismatch. Please type exact institution name: "${selectedCollege.name}".`);
+      return;
+    }
+
+    setActionError(null);
+    setSubmittingAction(true);
+    try {
+      await deleteCollegePermanently(selectedCollege.id);
+      setSuccessNotice(`Permanently deleted college '${selectedCollege.name}' and dissociated affiliated records.`);
+      closeActionModal();
+      fetchColleges(true);
+      setTimeout(() => setSuccessNotice(null), 6000);
+    } catch (err: any) {
+      setActionError(err.message || "Failed to delete college.");
     } finally {
       setSubmittingAction(false);
     }
@@ -468,59 +559,117 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
         </div>
 
         {/* Search and Filters Bar */}
-        <div className="rounded-xl bg-[#16171A] border border-[#26282E] p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-          {/* Status Tabs */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-            {[
-              { id: "pending", label: "Pending", count: counts.pending },
-              { id: "verified", label: "Verified", count: counts.verified },
-              { id: "rejected", label: "Rejected", count: counts.rejected },
-              { id: "suspended", label: "Suspended", count: counts.suspended },
-              { id: "all", label: "All", count: counts.all },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setStatusFilter(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-                  statusFilter === tab.id
-                    ? "bg-[#FF6B00] text-white shadow-xs"
-                    : "bg-[#22242A] text-[#A1A1AA] hover:text-white hover:bg-[#2C2E35]"
-                }`}
-              >
-                <span>{tab.label}</span>
-                <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                  statusFilter === tab.id ? "bg-black/30 text-white" : "bg-[#16171A] text-[#71717A]"
-                }`}>
-                  {tab.count}
-                </span>
-              </button>
-            ))}
+        <div className="rounded-xl bg-[#16171A] border border-[#26282E] p-4 space-y-3">
+          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+            {/* Status Tabs */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+              {[
+                { id: "pending", label: "Pending", count: counts.pending },
+                { id: "verified", label: "Verified", count: counts.verified },
+                { id: "rejected", label: "Rejected", count: counts.rejected },
+                { id: "suspended", label: "Suspended", count: counts.suspended },
+                { id: "all", label: "All", count: counts.all },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                    statusFilter === tab.id
+                      ? "bg-[#FF6B00] text-white shadow-xs"
+                      : "bg-[#22242A] text-[#A1A1AA] hover:text-white hover:bg-[#2C2E35]"
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    statusFilter === tab.id ? "bg-black/30 text-white" : "bg-[#16171A] text-[#71717A]"
+                  }`}>
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Search Input */}
+            <form onSubmit={handleSearchSubmit} className="relative w-full md:w-80">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#71717A]" />
+              <input
+                type="text"
+                placeholder="Search college, code, email, city..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-8 py-2 rounded-lg bg-[#1B1D22] border border-[#2E313A] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00] transition-colors"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    fetchColleges(true);
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717A] hover:text-white"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </form>
           </div>
 
-          {/* Search Input */}
-          <form onSubmit={handleSearchSubmit} className="relative w-full md:w-80">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#71717A]" />
-            <input
-              type="text"
-              placeholder="Search college, code, email, city..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-8 py-2 rounded-lg bg-[#1B1D22] border border-[#2E313A] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00] transition-colors"
-            />
-            {searchQuery && (
+          {/* Date Range & Sort Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#23252B] text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[#71717A] flex items-center gap-1 text-[11px] font-medium">
+                <Calendar className="h-3.5 w-3.5 text-[#FF6B00]" />
+                Registration Date:
+              </span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-[#1B1D22] border border-[#2E313A] text-xs text-white focus:outline-none focus:border-[#FF6B00]"
+                title="Start Date"
+              />
+              <span className="text-[#71717A]">to</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-[#1B1D22] border border-[#2E313A] text-xs text-white focus:outline-none focus:border-[#FF6B00]"
+                title="End Date"
+              />
               <button
                 type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  fetchColleges(true);
-                }}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717A] hover:text-white"
+                onClick={handleApplyDateFilter}
+                className="px-3 py-1.5 rounded-lg bg-[#FF6B00] hover:bg-[#FF8533] text-white font-semibold text-xs cursor-pointer transition-colors"
               >
-                <X className="h-3.5 w-3.5" />
+                Apply
               </button>
-            )}
-          </form>
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={handleClearDateFilter}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] text-[#A1A1AA] hover:text-white text-xs cursor-pointer transition-colors"
+                >
+                  Clear Dates
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-[#71717A] flex items-center gap-1 text-[11px] font-medium">
+                <ArrowUpDown className="h-3.5 w-3.5 text-[#FF6B00]" />
+                Sort:
+              </span>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
+                className="px-2.5 py-1.5 rounded-lg bg-[#1B1D22] border border-[#2E313A] text-xs text-white focus:outline-none focus:border-[#FF6B00] cursor-pointer"
+              >
+                <option value="newest">Newest Submission First</option>
+                <option value="oldest">Oldest Submission First</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Applications List */}
@@ -741,13 +890,24 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
                       {isSuspended && (
                         <button
                           type="button"
-                          onClick={() => openActionModal(col, "verify")}
+                          onClick={() => openActionModal(col, "unsuspend")}
                           className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors cursor-pointer"
                         >
-                          <ShieldCheck className="h-3.5 w-3.5" />
-                          <span>Re-instate / Verify</span>
+                          <Unlock className="h-3.5 w-3.5" />
+                          <span>Unsuspend / Restore</span>
                         </button>
                       )}
+
+                      {/* Permanent Delete Action Button */}
+                      <button
+                        type="button"
+                        onClick={() => openActionModal(col, "delete")}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#221515] hover:bg-[#321818] text-rose-400 hover:text-rose-300 border border-rose-900/40 text-xs font-semibold transition-colors cursor-pointer"
+                        title="Permanently Delete College"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span className="hidden sm:inline">Delete</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -768,7 +928,9 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
                   {actionType === "verify" && "Verify College & Authorize Portal"}
                   {actionType === "reject" && "Reject College Application"}
                   {actionType === "suspend" && "Suspend College Portal Access"}
-                  {actionType === "details" && "Submitted College Application"}
+                  {actionType === "unsuspend" && "Unsuspend College & Restore Portal Access"}
+                  {actionType === "delete" && "Permanently Delete College (Cascade Deletion)"}
+                  {actionType === "details" && "Submitted College Application & Audit Trail"}
                 </h3>
                 <p className="text-xs text-[#A1A1AA] mt-0.5">
                   Institution: <span className="text-[#FF6B00] font-semibold">{selectedCollege.name}</span>
@@ -978,34 +1140,246 @@ export const AdminCollegesPage: React.FC<AdminCollegesProps> = ({
               </div>
             )}
 
-            {actionType === "details" && (
-              <div className="space-y-4 text-xs">
-                <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-[#141518] border border-[#26282E]">
-                  <div>
-                    <span className="text-[#71717A] block">College ID:</span>
-                    <span className="font-mono text-white select-all">{selectedCollege.id}</span>
-                  </div>
-                  <div>
-                    <span className="text-[#71717A] block">Officer User ID:</span>
-                    <span className="font-mono text-white select-all">{selectedCollege.officerUserId}</span>
-                  </div>
-                  <div>
-                    <span className="text-[#71717A] block">Location:</span>
-                    <span className="text-white">{selectedCollege.city}, {selectedCollege.state}, {selectedCollege.country || "India"}</span>
-                  </div>
-                  <div>
-                    <span className="text-[#71717A] block">Domain / Website:</span>
-                    <span className="text-[#FF6B00]">{selectedCollege.domain || selectedCollege.website || "N/A"}</span>
-                  </div>
-                  <div>
-                    <span className="text-[#71717A] block">Officer Phone:</span>
-                    <span className="font-mono text-white">{selectedCollege.officerPhone || "N/A"}</span>
-                  </div>
-                  <div>
-                    <span className="text-[#71717A] block">Submission Date:</span>
-                    <span className="text-white">{new Date(selectedCollege.submittedAt || selectedCollege.createdAt).toLocaleString()}</span>
-                  </div>
+            {actionType === "unsuspend" && (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-lg bg-emerald-950/30 border border-emerald-700/40 text-emerald-200 text-xs leading-relaxed">
+                  Re-instating this college will unblock portal access for{" "}
+                  <strong className="text-white">{selectedCollege.officerName}</strong> ({selectedCollege.officerEmail}).
+                  The college account and officer verification status will be restored to Verified.
                 </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-white block">
+                    Internal Admin Notes (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="Reason for unblocking / re-instatement findings..."
+                    value={reviewNotesInput}
+                    onChange={(e) => setReviewNotesInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-[#32353E] text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-[#FF6B00]"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeActionModal}
+                    className="px-4 py-2 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] text-xs font-semibold text-[#A1A1AA] hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmUnsuspend}
+                    disabled={submittingAction}
+                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {submittingAction ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlock className="h-3.5 w-3.5" />}
+                    <span>Confirm Unsuspend & Restore</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {actionType === "delete" && (
+              <div className="space-y-4">
+                <div className="p-3.5 rounded-lg bg-rose-950/40 border border-rose-700/60 text-rose-200 text-xs leading-relaxed space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-rose-300">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                    <span>Irreversible Destructive Action Warning</span>
+                  </div>
+                  <p>
+                    Permanently deleting <strong className="text-white">{selectedCollege.name}</strong> will execute an immediate cascade deletion:
+                  </p>
+                  <ul className="list-disc list-inside space-y-0.5 text-[#FCA5A5] pl-1">
+                    <li>All college invitation codes will be permanently deleted.</li>
+                    <li>All student memberships for this college will be wiped.</li>
+                    <li>Affiliated students will be dissociated and reset to "Independent Learner".</li>
+                    <li>The placement officer role and active sessions will be revoked.</li>
+                    <li>An immutable administrative audit record will be logged.</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-white block">
+                    Type institution name to confirm: <span className="text-[#FF6B00] font-mono select-all font-bold">{selectedCollege.name}</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={`Type "${selectedCollege.name}" exactly`}
+                    value={deleteConfirmInput}
+                    onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#22242A] border border-rose-700/40 text-xs text-white placeholder-[#71717A] focus:outline-none focus:border-rose-500 font-medium"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeActionModal}
+                    className="px-4 py-2 rounded-lg bg-[#22242A] hover:bg-[#2C2E35] text-xs font-semibold text-[#A1A1AA] hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    disabled={submittingAction || deleteConfirmInput.trim() !== selectedCollege.name.trim()}
+                    className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {submittingAction ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    <span>Permanently Delete College</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {actionType === "details" && (
+              <div className="space-y-4 text-xs max-h-[75vh] overflow-y-auto pr-1">
+                {loadingDetails ? (
+                  <div className="py-8 text-center space-y-2">
+                    <Loader2 className="h-6 w-6 text-[#FF6B00] animate-spin mx-auto" />
+                    <p className="text-xs text-[#A1A1AA]">Loading complete application record & audit trail...</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-lg bg-[#141518] border border-[#26282E]">
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Institution Code:</span>
+                        <span className="font-mono text-white font-bold">{selectedCollege.code || "N/A"}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Status:</span>
+                        <span className="font-bold uppercase tracking-wider text-white">{selectedCollege.status}</span>
+                      </div>
+                      <div className="col-span-1 sm:col-span-2">
+                        <span className="text-[#71717A] block font-medium">Full Address:</span>
+                        <span className="text-white">{selectedCollege.city}, {selectedCollege.state}, {selectedCollege.country || "India"}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Domain / Website:</span>
+                        <span className="text-[#FF6B00]">{selectedCollege.domain || selectedCollege.website || "N/A"}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Officer Name:</span>
+                        <span className="text-white font-semibold">{selectedCollege.officerName}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Officer Email:</span>
+                        <span className="font-mono text-white select-all">{selectedCollege.officerEmail}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Officer Phone:</span>
+                        <span className="font-mono text-white">{selectedCollege.officerPhone || "N/A"}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Officer Designation:</span>
+                        <span className="text-white">{selectedCollege.officerDesignation || "Placement Officer"}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#71717A] block font-medium">Registration Submission:</span>
+                        <span className="text-white font-mono">
+                          {new Date(selectedCollege.submittedAt || selectedCollege.createdAt).toLocaleString("en-IN", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          })}
+                        </span>
+                      </div>
+                      {selectedCollege.reviewedAt && (
+                        <div>
+                          <span className="text-[#71717A] block font-medium">Last Reviewed:</span>
+                          <span className="text-white font-mono">
+                            {new Date(selectedCollege.reviewedAt).toLocaleString("en-IN", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Verification / Suspension / Rejection Notes */}
+                    {(selectedCollege.verificationMethod || selectedCollege.rejectionReason || selectedCollege.suspensionReason || selectedCollege.reviewNotes) && (
+                      <div className="p-3 rounded-lg bg-[#141518] border border-[#26282E] space-y-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-[#71717A] block">
+                          Reviewer Decision Notes
+                        </span>
+                        {selectedCollege.verificationMethod && (
+                          <div className="text-emerald-400">
+                            <strong>Verification Method:</strong> {selectedCollege.verificationMethod}
+                          </div>
+                        )}
+                        {selectedCollege.rejectionReason && (
+                          <div className="text-rose-400">
+                            <strong>Rejection Reason:</strong> {selectedCollege.rejectionReason}
+                          </div>
+                        )}
+                        {selectedCollege.suspensionReason && (
+                          <div className="text-orange-400">
+                            <strong>Suspension Reason:</strong> {selectedCollege.suspensionReason}
+                          </div>
+                        )}
+                        {selectedCollege.reviewNotes && (
+                          <div className="text-[#9CA3AF] italic">
+                            <strong>Internal Notes:</strong> {selectedCollege.reviewNotes}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Live Audit Log History */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-white uppercase tracking-wider">
+                        <History className="h-3.5 w-3.5 text-[#FF6B00]" />
+                        <span>Audit Trail History</span>
+                      </div>
+                      {fullCollegeData?.auditLogs && fullCollegeData.auditLogs.length > 0 ? (
+                        <div className="rounded-lg border border-[#26282E] overflow-hidden">
+                          <table className="w-full text-left text-[11px]">
+                            <thead className="bg-[#1C1E23] text-[#71717A] border-b border-[#26282E]">
+                              <tr>
+                                <th className="p-2">Action</th>
+                                <th className="p-2">Admin / Actor</th>
+                                <th className="p-2">Timestamp</th>
+                                <th className="p-2">Reason / Note</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#26282E] bg-[#141518]">
+                              {fullCollegeData.auditLogs.map((log: any) => (
+                                <tr key={log.id} className="hover:bg-[#1B1D22]">
+                                  <td className="p-2 font-bold uppercase">
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                      log.action === "verify" || log.action === "unsuspend"
+                                        ? "bg-emerald-950/60 text-emerald-400 border border-emerald-700/40"
+                                        : log.action === "suspend"
+                                        ? "bg-orange-950/60 text-orange-400 border border-orange-700/40"
+                                        : "bg-rose-950/60 text-rose-400 border border-rose-700/40"
+                                    }`}>
+                                      {log.action}
+                                    </span>
+                                  </td>
+                                  <td className="p-2 text-[#A1A1AA] font-mono">{log.actorEmail}</td>
+                                  <td className="p-2 text-[#71717A] font-mono">
+                                    {new Date(log.timestamp).toLocaleString("en-IN", {
+                                      dateStyle: "short",
+                                      timeStyle: "short",
+                                    })}
+                                  </td>
+                                  <td className="p-2 text-white">{log.reason || log.details?.reviewNotes || "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-[#71717A] italic p-2 bg-[#141518] rounded border border-[#26282E]">
+                          No previous operational audit logs recorded for this institution.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 <div className="flex justify-end pt-2">
                   <button
